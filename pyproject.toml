@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-nightshift"
+version = "0.1.0"
+description = "Quota-aware automation for Claude Code: check limits, pre-warm the 5h window, queue prompts overnight, auto-resume interrupted sessions."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "dujunyi416" }]
+keywords = ["claude", "claude-code", "rate-limit", "automation", "quota"]
+
+[project.urls]
+Homepage = "https://github.com/dujunyi416/claude-nightshift"
+
+[project.scripts]
+nightshift = "nightshift.cli:main"
+
+[tool.setuptools]
+packages = ["nightshift"]
