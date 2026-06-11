@@ -188,15 +188,20 @@ def watch(poll_sec: float = 0) -> None:
     task interrupted by the limit continues the moment the window resets.
     """
     from .resume import format_pending, pending_resumes, resume_session
+    from .tgbot import start_polling
+    from .warmup import maybe_keepwarm
 
     cfg = load_config()
     rcfg = cfg["runner"]
     poll_sec = poll_sec or rcfg["poll_interval_sec"]
     stop_util = rcfg["stop_utilization"]
     resume_cfg = cfg["resume"]
+    start_polling()  # two-way telegram control, no-op if unconfigured
+    last_keepwarm = 0.0
     _log(f"watch started (poll {poll_sec:.0f}s, Ctrl+C to stop)")
 
     while True:
+        last_keepwarm = maybe_keepwarm(last_keepwarm)
         sessions = (
             pending_resumes(resume_cfg["lookback_hours"])
             if resume_cfg.get("enabled", True) else []

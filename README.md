@@ -30,6 +30,13 @@ That creates three recoverable inefficiencies:
 ## Install
 
 ```
+pip install "claude-nightshift[tray] @ git+https://github.com/dujunyi416/claude-nightshift"
+nightshift status
+```
+
+Or clone and run without installing anything:
+
+```
 git clone https://github.com/dujunyi416/claude-nightshift
 cd claude-nightshift
 python -m nightshift status
@@ -123,6 +130,14 @@ via `gui.port`) where everything is one click:
   can be auto-created ("new project" mode)
 - run history with one-click log viewing
 - set / remove the daily warmup time, or learn it from your history
+- **weekly budget line**: at your current burn rate, will the 7-day quota
+  survive until reset - and if not, when it runs out
+- **keep-warm mode**: during your awake hours, re-activate the 5h window
+  the moment it goes idle (a 16:00 reset is warmed at 16:00, not when you
+  notice at 16:30); outside those hours it stays quiet
+- **Telegram two-way control**: get job-done pings, and reply from bed -
+  `/status`, `/queue`, `/resume`, `/warmup`, or send any text to queue it
+  as a job
 - start / stop the watch autopilot
 - "start with Windows" toggle (creates a Startup shortcut)
 

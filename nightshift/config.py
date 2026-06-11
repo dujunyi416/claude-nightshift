@@ -55,15 +55,32 @@ DEFAULTS: dict[str, Any] = {
         # (undocumented) endpoint. claude-code-statusline uses 300s.
         "cache_ttl_sec": 60,
     },
+    "keepwarm": {
+        # When enabled, during awake hours the 5h window is re-activated the
+        # moment it goes idle (so a 16:00 reset is warmed at 16:00, not when
+        # you happen to notice at 16:30). Outside these hours nothing fires -
+        # the morning scheduled warmup takes over.
+        "enabled": False,
+        "start": "07:00",
+        "end": "23:00",
+        # Minimum minutes between ping attempts (safety throttle).
+        "min_gap_min": 10,
+    },
     "gui": {
         # Local web panel port (127.0.0.1 only).
         "port": 8377,
     },
     "telegram": {
-        # Optional: notify when overnight jobs finish. Leave empty to disable.
-        # Can also be set via env vars NIGHTSHIFT_TG_TOKEN / NIGHTSHIFT_TG_CHAT.
+        # Optional: notify when overnight jobs finish, and (if polling is on)
+        # control nightshift from your phone: /status /queue /resume, or just
+        # send text to queue it as a job. Leave empty to disable.
+        # Env vars NIGHTSHIFT_TG_TOKEN / NIGHTSHIFT_TG_CHAT also work.
         "bot_token": "",
         "chat_id": "",
+        # Where /add-style jobs from Telegram run by default.
+        "default_cwd": "",
+        # Two-way control (long-polls getUpdates from tray/watch).
+        "polling": True,
     },
 }
 

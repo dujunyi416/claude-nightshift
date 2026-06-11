@@ -25,6 +25,14 @@ class SessionInfo:
     last_active: datetime
     interrupted: bool
     error_text: str
+    # Tiny throwaway sessions (warmup pings, one-liner tests) the panel
+    # hides by default.
+    trivial: bool = False
+
+
+# Titles that mark our own machine-generated sessions.
+_TRIVIAL_TITLES = ("reply with exactly", "say ok", "respond with confirmation")
+_TRIVIAL_BYTES = 6 * 1024
 
 
 def _head_info(path: Path, max_lines: int = 40) -> tuple[str, str, str]:
@@ -102,10 +110,17 @@ def list_recent_sessions(days: float = 7, limit: int = 20,
             break
         if not title:
             title = f"(untitled) {session_id[:8]}"
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        trivial = size < _TRIVIAL_BYTES or any(
+            title.lower().startswith(t) for t in _TRIVIAL_TITLES)
         out.append(SessionInfo(
             session_id=session_id, title=title,
             cwd=cwd or str(Path.home()),
             last_active=last_active,
             interrupted=interrupted, error_text=error_text,
+            trivial=trivial,
         ))
     return out

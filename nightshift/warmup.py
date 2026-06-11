@@ -69,6 +69,53 @@ def warmup(force: bool = False) -> bool:
     return False
 
 
+def within_hours(hhmm_start: str, hhmm_end: str,
+                 now: datetime | None = None) -> bool:
+    """Is `now` inside the [start, end) local-time range? Handles ranges
+    that wrap past midnight (e.g. 22:00-06:00)."""
+    now = now or datetime.now()
+    try:
+        sh, sm = map(int, hhmm_start.split(":"))
+        eh, em = map(int, hhmm_end.split(":"))
+    except ValueError:
+        return False
+    cur = now.hour * 60 + now.minute
+    start, end = sh * 60 + sm, eh * 60 + em
+    if start <= end:
+        return start <= cur < end
+    return cur >= start or cur < end
+
+
+def maybe_keepwarm(last_attempt_ts: float) -> float:
+    """Keep-warm tick: if enabled, inside awake hours, and the 5h window is
+    idle, ping immediately so the new window starts the second the old one
+    resets - not half an hour later when you notice.
+
+    Called periodically by the tray app / watch loop with the timestamp of
+    the previous attempt; returns the (possibly updated) timestamp.
+    """
+    import time as _time
+
+    cfg = load_config()
+    kw = cfg.get("keepwarm", {})
+    if not kw.get("enabled"):
+        return last_attempt_ts
+    if not within_hours(kw.get("start", "07:00"), kw.get("end", "23:00")):
+        return last_attempt_ts
+    gap = kw.get("min_gap_min", 10) * 60
+    if _time.time() - last_attempt_ts < gap:
+        return last_attempt_ts
+    try:
+        usage = fetch_usage()
+    except RuntimeError:
+        return last_attempt_ts
+    if usage.five_hour.active:
+        return last_attempt_ts
+    _log("keepwarm: window idle inside awake hours - pinging")
+    warmup()  # warmup() re-checks and logs on its own
+    return _time.time()
+
+
 if __name__ == "__main__":
     ok = warmup(force="--force" in sys.argv)
     sys.exit(0 if ok else 1)

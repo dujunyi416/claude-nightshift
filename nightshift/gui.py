@@ -118,8 +118,12 @@ class App:
         self.icon.title = tip[:120]
 
     def _refresh_loop(self) -> None:
+        from .warmup import maybe_keepwarm
+
+        last_keepwarm = 0.0
         while not self._stop.wait(REFRESH_SEC):
             self.refresh_usage()
+            last_keepwarm = maybe_keepwarm(last_keepwarm)
 
     # ----- panel state -----
 
@@ -142,9 +146,32 @@ class App:
                 "source": u.source,
                 "fetched_local": f"{u.fetched_at.astimezone():%H:%M:%S}",
             }
+        weekly = None
+        if u:
+            from .quota import weekly_projection
+
+            p = weekly_projection(u)
+            if p:
+                weekly = {
+                    "projected": round(p["projected_at_reset"]),
+                    "reliable": p["reliable"],
+                    "exhaust_local": (
+                        f"{p['exhaust_at'].astimezone():%a %H:%M}"
+                        if p["exhaust_at"] else ""),
+                }
+        cfg = load_config()
+        kw = cfg.get("keepwarm", {})
+        tg = cfg.get("telegram", {})
         running = self.watch_proc is not None and self.watch_proc.poll() is None
         return {
             "usage": usage,
+            "weekly": weekly,
+            "keepwarm": {"enabled": bool(kw.get("enabled")),
+                         "start": kw.get("start", "07:00"),
+                         "end": kw.get("end", "23:00")},
+            "telegram": {"configured": bool(tg.get("bot_token")
+                                            and tg.get("chat_id")),
+                         "default_cwd": tg.get("default_cwd", "")},
             "warmup_time": (load_config()["warmup"]["times"] or ["07:00"])[0],
             "schedule": self._schedule_text or self._load_schedule_text(),
             "queue": [
@@ -225,8 +252,42 @@ class App:
                 "last_local": f"{s.last_active.astimezone():%m-%d %H:%M}",
                 "interrupted": s.interrupted,
                 "error_text": s.error_text,
+                "trivial": s.trivial,
             })
         return out
+
+    # ----- keepwarm / telegram settings -----
+
+    def set_keepwarm(self, enabled: bool, start: str, end: str) -> dict:
+        for t in (start, end):
+            if not re.fullmatch(r"\d{1,2}:\d{2}", t):
+                return {"ok": False, "message": "时间格式应为 HH:MM"}
+        cfg = load_config()
+        cfg.setdefault("keepwarm", {})
+        cfg["keepwarm"].update(enabled=enabled, start=start, end=end)
+        save_config(cfg)
+        return {"ok": True, "message":
+                f"保温{'开启' if enabled else '关闭'}（{start}–{end}）"}
+
+    def set_telegram(self, token: str, chat: str, default_cwd: str) -> dict:
+        cfg = load_config()
+        tg = cfg.setdefault("telegram", {})
+        # Empty fields mean "keep what's already saved" so re-testing
+        # doesn't require retyping the token.
+        token = token.strip() or tg.get("bot_token", "")
+        chat = chat.strip() or tg.get("chat_id", "")
+        tg.update(bot_token=token, chat_id=chat,
+                  default_cwd=default_cwd.strip())
+        save_config(cfg)
+        if token.strip() and chat.strip():
+            from .notify import notify
+            from .tgbot import start_polling
+
+            ok = notify("[nightshift] 连接成功，发 /help 看指令")
+            start_polling()
+            return {"ok": ok, "message":
+                    "已保存并发送测试消息" if ok else "已保存，但测试消息失败（检查 token/chat_id）"}
+        return {"ok": True, "message": "已清空 Telegram 配置"}
 
     # ----- history -----
 
@@ -358,6 +419,9 @@ def run_gui(open_browser: bool = True) -> None:
     print(f"panel: {url}")
     app.refresh_usage()
     threading.Thread(target=app._refresh_loop, daemon=True).start()
+    from .tgbot import start_polling
+
+    start_polling()  # two-way telegram control, no-op if unconfigured
     if open_browser:
         webbrowser.open(url)
 

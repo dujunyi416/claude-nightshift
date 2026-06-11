@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .config import DATA_DIR, load_config
 from .credentials import load_creds
@@ -163,6 +163,40 @@ def fetch_usage(force: bool = False, ttl: float | None = None) -> UsageSnapshot:
         if snap:
             return snap
         raise RuntimeError(f"usage endpoint unreachable and no cache: {e}") from e
+
+
+def weekly_projection(s: UsageSnapshot,
+                      now: datetime | None = None) -> dict | None:
+    """Budget view of the 7-day window: at the current burn rate, when does
+    the weekly quota run out (or how much will be used by reset)?
+
+    Returns None when there's no usable data, or a dict:
+      {"used": %, "elapsed_h": h, "projected_at_reset": %,
+       "exhaust_at": datetime|None, "reliable": bool}
+    """
+    w = s.seven_day
+    if w.utilization is None or w.resets_at is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    start = w.resets_at - timedelta(days=7)
+    elapsed_h = (now - start).total_seconds() / 3600
+    if elapsed_h <= 0:
+        return None
+    burn_per_h = w.utilization / elapsed_h
+    projected = burn_per_h * 168
+    exhaust_at = None
+    if burn_per_h > 0:
+        eta = start + timedelta(hours=100 / burn_per_h)
+        if eta < w.resets_at:
+            exhaust_at = eta
+    return {
+        "used": w.utilization,
+        "elapsed_h": elapsed_h,
+        "projected_at_reset": projected,
+        "exhaust_at": exhaust_at,
+        # Early in the window a few heavy hours wildly skew the rate.
+        "reliable": elapsed_h >= 12,
+    }
 
 
 def format_snapshot(s: UsageSnapshot) -> str:

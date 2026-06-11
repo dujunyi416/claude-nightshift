@@ -66,13 +66,25 @@ PAGE = """<!doctype html>
   <div class="bar"><div id="b5" style="width:0%;background:#2e9e4f"></div></div>
   <div>7 天窗口 <b id="u7">…</b> <span class="muted" id="r7"></span></div>
   <div class="bar"><div id="b7" style="width:0%;background:#2e9e4f"></div></div>
+  <div class="muted" id="weekly"></div>
   <div class="row"><button class="gray" onclick="act('/api/refresh').then(refresh)">立即刷新</button>
   <button class="gray" onclick="act('/api/warmup_now')">立即预热窗口</button></div>
 </div>
 
-<div class="card"><h2>最近会话 — 点击选中后可在下方队列里"续写"它</h2>
-  <div class="row"><input type="text" id="sfilter" size="28"
-    placeholder="搜索标题 / 目录…" oninput="renderSessions()"></div>
+<div class="card"><h2>白天保温 — 醒着的时段，窗口一空闲就自动激活</h2>
+  <div class="row"><label><input type="checkbox" id="kwon"> 开启</label>
+    从 <input type="text" id="kwstart" size="5" placeholder="07:00">
+    到 <input type="text" id="kwend" size="5" placeholder="23:00">
+    <button onclick="applyKeepwarm()">应用</button>
+    <span class="muted" id="kwmsg"></span></div>
+  <div class="muted">例：16:00 限额重置，16:01 自动续上新窗口；时段外（睡觉时）不动作，交给每日预热。</div>
+</div>
+
+<div class="card"><h2>最近对话 — 每一项是一个对话（按项目分组），点击选中后在下方队列里"续写"它</h2>
+  <div class="row"><input type="text" id="sfilter" size="24"
+    placeholder="搜索标题 / 目录…" oninput="renderSessions()">
+    <label><input type="checkbox" id="hidetrivial" checked
+      onchange="renderSessions()"> 隐藏琐碎对话</label></div>
   <ul id="sessions"><li class="muted">加载中…</li></ul>
 </div>
 
@@ -105,6 +117,15 @@ PAGE = """<!doctype html>
     <button class="red" onclick="act('/api/warmup/remove').then(refresh)">移除</button>
     <button class="gray" onclick="suggest()">学习我的作息</button></div>
   <div class="muted" id="wstatus"></div>
+</div>
+
+<div class="card"><h2>Telegram — 手机收通知 + 回消息遥控（/status /queue /resume，发任意文字=排任务）</h2>
+  <div class="row">Bot Token <input type="text" id="tgtoken" size="34"
+    placeholder="123456:ABC-...（@BotFather 创建）"></div>
+  <div class="row">Chat ID <input type="text" id="tgchat" size="14"
+    placeholder="如 5021..."> 默认目录 <input type="text" id="tgcwd" size="22"></div>
+  <div class="row"><button onclick="applyTelegram()">保存并测试</button>
+    <span class="muted" id="tgmsg"></span></div>
 </div>
 
 <div class="card"><h2>系统</h2>
@@ -144,15 +165,35 @@ function setTarget(s) {
 function clearTarget() { TARGET = null; $('target').style.display='none'; renderSessions(); }
 function renderSessions() {
   const q = $('sfilter').value.toLowerCase();
+  const hideTrivial = $('hidetrivial').checked;
   const items = SESSIONS.filter(s =>
-    !q || s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q));
-  $('sessions').innerHTML = items.map(s => `
+    (!hideTrivial || !s.trivial) &&
+    (!q || s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q)));
+  const groups = {};
+  for (const s of items) (groups[s.cwd_name] = groups[s.cwd_name] || []).push(s);
+  $('sessions').innerHTML = Object.entries(groups).map(([dir, ss]) => `
+    <li style="background:none;border:none;padding:8px 0 0;font-size:12px">
+      <b style="color:#9ecbff">📁 ${esc(dir)}</b>
+      <span class="muted">${ss.length} 个对话</span></li>` +
+    ss.map(s => `
     <li class="sess${TARGET && TARGET.session_id===s.session_id ? ' sel':''}"
         onclick='setTarget(${JSON.stringify(s).replace(/'/g,"&#39;")})'>
       <div class="grow"><div class="t">${esc(s.title)}</div>
-        <div class="muted t">${esc(s.cwd_name)} · ${s.last_local}</div></div>
+        <div class="muted t">${s.last_local}</div></div>
       ${s.interrupted ? '<span class="badge cut">被限额打断</span>' : ''}
-    </li>`).join('') || '<li class="muted">近 7 天无会话</li>';
+    </li>`).join('')).join('') || '<li class="muted">近 7 天无对话</li>';
+}
+function applyKeepwarm() {
+  post('/api/keepwarm', {enabled: $('kwon').checked,
+    start: $('kwstart').value.trim() || '07:00',
+    end: $('kwend').value.trim() || '23:00'})
+  .then(r => { $('kwmsg').textContent = r.message; });
+}
+function applyTelegram() {
+  $('tgmsg').textContent = '保存中…';
+  post('/api/telegram', {token: $('tgtoken').value, chat: $('tgchat').value,
+    default_cwd: $('tgcwd').value})
+  .then(r => { $('tgmsg').textContent = r.message; });
 }
 async function loadSessions() {
   SESSIONS = await (await fetch('/api/sessions')).json();
@@ -165,6 +206,23 @@ async function refresh() {
     fmtWin(s.usage.seven_day,'u7','b7','r7');
     $('src').textContent = `更新 ${s.usage.fetched_local} · 来源 ${s.usage.source}`;
   } else { $('src').textContent = '额度获取失败（token 过期？任何 claude 命令可刷新）'; }
+  if (s.weekly) {
+    const w = s.weekly;
+    $('weekly').textContent = !w.reliable
+      ? `周预算：本周窗口刚开始，数据积累中（粗估到重置时 ~${w.projected}%）`
+      : w.exhaust_local
+        ? `⚠ 周预算：按当前烧速，周额度约在 ${w.exhaust_local} 用尽（早于重置）`
+        : `周预算：按当前烧速，到重置时约用 ${w.projected}%，安全`;
+    $('weekly').style.color = w.reliable && w.exhaust_local ? '#e0a020' : '';
+  } else { $('weekly').textContent = ''; }
+  if (!$('kwstart').matches(':focus') && !$('kwend').matches(':focus')) {
+    $('kwon').checked = s.keepwarm.enabled;
+    $('kwstart').value = s.keepwarm.start;
+    $('kwend').value = s.keepwarm.end;
+  }
+  if (!$('tgcwd').matches(':focus')) $('tgcwd').value = s.telegram.default_cwd;
+  if (s.telegram.configured && !$('tgtoken').value)
+    $('tgtoken').placeholder = '已配置（留空保持不变需重新输入才会覆盖）';
   if (!$('wtime').matches(':focus')) $('wtime').value = s.warmup_time;
   $('wstatus').textContent = s.schedule;
   $('queue').innerHTML = s.queue.map(j =>
@@ -279,6 +337,12 @@ class PanelHandler(BaseHTTPRequestHandler):
             "/api/queue/remove": lambda: self.app.remove_job(
                 body.get("id", "")),
             "/api/watch/toggle": self.app.toggle_watch,
+            "/api/keepwarm": lambda: self.app.set_keepwarm(
+                bool(body.get("enabled")), body.get("start", "07:00"),
+                body.get("end", "23:00")),
+            "/api/telegram": lambda: self.app.set_telegram(
+                body.get("token", ""), body.get("chat", ""),
+                body.get("default_cwd", "")),
             "/api/autostart": lambda: self.app.set_autostart(
                 bool(body.get("enabled"))),
         }
