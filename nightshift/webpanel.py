@@ -119,17 +119,31 @@ PAGE = """<!doctype html>
   <div class="muted" id="wstatus"></div>
 </div>
 
-<div class="card"><h2>Telegram — 手机收通知 + 回消息遥控（/status /queue /resume，发任意文字=排任务）</h2>
-  <div class="row">Bot Token <input type="text" id="tgtoken" size="34"
-    placeholder="123456:ABC-...（@BotFather 创建）"></div>
-  <div class="row">Chat ID <input type="text" id="tgchat" size="14"
-    placeholder="如 5021..."></div>
-  <div class="row">默认目录 <input type="text" id="tgcwd" size="40"
-    placeholder="手机发文字时，任务在哪个项目目录跑（如 D:\\btc_quant）"></div>
-  <div class="muted">默认目录 = 你在手机上直接发一句话时，它当作任务在哪个项目里执行。
-    填你最常做的项目路径；留空则用用户主目录。/status /queue /resume 等指令不受影响。</div>
-  <div class="row"><button onclick="applyTelegram()">保存并测试</button>
-    <span class="muted" id="tgmsg"></span></div>
+<div class="card"><h2>Telegram 手机遥控</h2>
+  <!-- not configured: minimal setup (auto-detects chat id) -->
+  <div id="tgsetup">
+    <div class="muted">① 在手机上给机器人发一条任意消息 ② 把 Bot Token 粘进来点连接，
+      chat 会自动识别（无需手填）。</div>
+    <div class="row">Bot Token <input type="text" id="tgtoken" size="38"
+      placeholder="8917...:AAH...（@BotFather 创建）"></div>
+    <div class="row"><button onclick="applyTelegram()">连接</button>
+      <span class="muted" id="tgmsg"></span></div>
+  </div>
+  <!-- configured: bot functions, no chat-log clutter -->
+  <div id="tgfuncs" style="display:none">
+    <div class="row"><span class="ok" id="tgstatus">已连接</span>
+      <button class="gray small" onclick="reconfigTg()">重新配置</button></div>
+    <div class="row"><button class="gray" onclick="pushTg('status')">把额度推到手机</button>
+      <button class="gray" onclick="pushTg('queue')">把队列推到手机</button>
+      <span class="muted" id="tgmsg2"></span></div>
+    <div class="row">睡前默认目录 <input type="text" id="tgcwd" size="34"
+      placeholder="如 D:\\btc_quant；留空=主目录">
+      <button class="small" onclick="saveTgCwd()">保存</button>
+      <span class="muted" id="tgcwdmsg"></span></div>
+    <div class="muted">手机上：直接发一句话 = 在上面这个目录排一个任务；
+      也可发 <b>/status</b> 查额度、<b>/queue</b> 看队列、
+      <b>/resume</b> 续跑被打断的会话、<b>/warmup</b> 立即预热。</div>
+  </div>
 </div>
 
 <div class="card"><h2>系统</h2>
@@ -209,11 +223,21 @@ function applyKeepwarm() {
     end: $('kwend').value.trim() || '23:00'})
   .then(r => { $('kwmsg').textContent = r.message; });
 }
+let TG_RECONFIG = false;
 function applyTelegram() {
-  $('tgmsg').textContent = '保存中…';
-  post('/api/telegram', {token: $('tgtoken').value, chat: $('tgchat').value,
-    default_cwd: $('tgcwd').value})
-  .then(r => { $('tgmsg').textContent = r.message; });
+  $('tgmsg').textContent = '连接中…';
+  post('/api/telegram', {token: $('tgtoken').value, chat: '', default_cwd: ''})
+  .then(r => { $('tgmsg').textContent = r.message;
+    if (r.ok) { TG_RECONFIG = false; $('tgtoken').value=''; refresh(); } });
+}
+function reconfigTg() { TG_RECONFIG = true; refresh(); }
+function pushTg(what) {
+  $('tgmsg2').textContent = '推送中…';
+  post('/api/telegram/push', {what}).then(r => $('tgmsg2').textContent = r.message);
+}
+function saveTgCwd() {
+  post('/api/telegram', {token:'', chat:'', default_cwd: $('tgcwd').value})
+  .then(r => $('tgcwdmsg').textContent = '已保存');
 }
 async function loadSessions() {
   SESSIONS = await (await fetch('/api/sessions')).json();
@@ -240,9 +264,13 @@ async function refresh() {
     $('kwstart').value = s.keepwarm.start;
     $('kwend').value = s.keepwarm.end;
   }
-  if (!$('tgcwd').matches(':focus')) $('tgcwd').value = s.telegram.default_cwd;
-  if (s.telegram.configured && !$('tgtoken').value)
-    $('tgtoken').placeholder = '已配置（留空保持不变需重新输入才会覆盖）';
+  const tg = s.telegram;
+  $('tgsetup').style.display = (tg.configured && !TG_RECONFIG) ? 'none' : 'block';
+  $('tgfuncs').style.display = (tg.configured && !TG_RECONFIG) ? 'block' : 'none';
+  if (tg.configured) {
+    $('tgstatus').textContent = `已连接 @${tg.bot_username || '?'}（chat ${tg.chat_id}）`;
+    if (!$('tgcwd').matches(':focus')) $('tgcwd').value = tg.default_cwd;
+  }
   if (!$('wtime').matches(':focus')) $('wtime').value = s.warmup_time;
   $('wstatus').textContent = s.schedule;
   $('queue').innerHTML = s.queue.map(j =>
@@ -365,6 +393,8 @@ class PanelHandler(BaseHTTPRequestHandler):
             "/api/telegram": lambda: self.app.set_telegram(
                 body.get("token", ""), body.get("chat", ""),
                 body.get("default_cwd", "")),
+            "/api/telegram/push": lambda: self.app.tg_push(
+                body.get("what", "status")),
             "/api/autostart": lambda: self.app.set_autostart(
                 bool(body.get("enabled"))),
         }

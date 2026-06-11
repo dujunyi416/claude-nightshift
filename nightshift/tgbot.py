@@ -41,6 +41,43 @@ def _api(token: str, method: str, **params) -> dict:
         return json.load(resp)
 
 
+def get_bot_username(token: str) -> str | None:
+    """Return the bot's @username, or None if the token is invalid."""
+    try:
+        me = _api(token, "getMe")
+        return (me.get("result") or {}).get("username") if me.get("ok") else None
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return None
+
+
+def mark_offset_current(token: str) -> None:
+    """Advance our update offset past all pending messages, so messages sent
+    *before* connecting (e.g. the one used to detect the chat id) are not
+    replayed and executed as jobs once polling starts."""
+    try:
+        up = _api(token, "getUpdates")
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return
+    ids = [u["update_id"] for u in up.get("result", []) if "update_id" in u]
+    if ids:
+        _save_offset(max(ids) + 1)
+
+
+def resolve_chat_id(token: str) -> str | None:
+    """Find the chat id of whoever last messaged the bot - so the user just
+    pastes a token and texts the bot, no manual chat-id lookup needed."""
+    try:
+        up = _api(token, "getUpdates")
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return None
+    for u in reversed(up.get("result", [])):
+        msg = u.get("message") or u.get("edited_message") or {}
+        cid = (msg.get("chat") or {}).get("id")
+        if cid:
+            return str(cid)
+    return None
+
+
 def _load_offset() -> int:
     try:
         return json.loads(OFFSET_PATH.read_text())["offset"]

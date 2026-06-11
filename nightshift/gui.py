@@ -171,6 +171,8 @@ class App:
                          "end": kw.get("end", "23:00")},
             "telegram": {"configured": bool(tg.get("bot_token")
                                             and tg.get("chat_id")),
+                         "bot_username": tg.get("bot_username", ""),
+                         "chat_id": tg.get("chat_id", ""),
                          "default_cwd": tg.get("default_cwd", "")},
             "warmup_time": (load_config()["warmup"]["times"] or ["07:00"])[0],
             "schedule": self._schedule_text or self._load_schedule_text(),
@@ -316,24 +318,68 @@ class App:
                 f"保温{'开启' if enabled else '关闭'}（{start}–{end}）"}
 
     def set_telegram(self, token: str, chat: str, default_cwd: str) -> dict:
+        from .tgbot import (get_bot_username, mark_offset_current,
+                            resolve_chat_id, start_polling)
+
         cfg = load_config()
         tg = cfg.setdefault("telegram", {})
-        # Empty fields mean "keep what's already saved" so re-testing
-        # doesn't require retyping the token.
-        token = token.strip() or tg.get("bot_token", "")
-        chat = chat.strip() or tg.get("chat_id", "")
-        tg.update(bot_token=token, chat_id=chat,
-                  default_cwd=default_cwd.strip())
-        save_config(cfg)
-        if token.strip() and chat.strip():
-            from .notify import notify
-            from .tgbot import start_polling
+        prev_token, prev_chat = tg.get("bot_token", ""), tg.get("chat_id", "")
+        # Empty fields mean "keep what's already saved" so re-saving (e.g. to
+        # change the default dir) doesn't require retyping the token.
+        token = token.strip() or prev_token
+        chat = chat.strip() or prev_chat
 
-            ok = notify("[nightshift] 连接成功，发 /help 看指令")
+        # cwd-only update on an already-connected bot: save quietly, no ping.
+        if token and chat and token == prev_token and chat == prev_chat:
+            tg["default_cwd"] = default_cwd.strip()
+            save_config(cfg)
+            return {"ok": True, "message": "默认目录已保存"}
+
+        if token and not chat:
+            # Auto-detect: whoever last messaged the bot.
+            chat = resolve_chat_id(token) or ""
+            if not chat:
+                tg["default_cwd"] = default_cwd.strip()
+                save_config(cfg)
+                return {"ok": False, "message":
+                        "先在手机上给机器人发一条任意消息，再点保存（会自动识别）"}
+
+        username = get_bot_username(token) if token else None
+        tg.update(bot_token=token, chat_id=chat, default_cwd=default_cwd.strip(),
+                  bot_username=username or tg.get("bot_username", ""))
+        save_config(cfg)
+
+        if token and chat:
+            from .notify import notify
+
+            mark_offset_current(token)  # don't replay pre-connect messages
+            ok = notify("[nightshift] 连接成功 ✓ 发 /help 看指令，或直接发任意"
+                        "文字给我，我会把它排成一个任务在睡前队列里。")
             start_polling()
             return {"ok": ok, "message":
-                    "已保存并发送测试消息" if ok else "已保存，但测试消息失败（检查 token/chat_id）"}
+                    f"已连接 @{username or '?'}（chat {chat}），测试消息已发送"
+                    if ok else "已保存，但测试消息失败（token 可能无效）"}
         return {"ok": True, "message": "已清空 Telegram 配置"}
+
+    def tg_push(self, what: str) -> dict:
+        """Push status/queue to the phone on demand (one-tap from the panel)."""
+        from .notify import notify
+
+        if what == "status":
+            from .quota import fetch_usage, format_snapshot
+
+            try:
+                text = format_snapshot(fetch_usage())
+            except RuntimeError as e:
+                text = f"额度获取失败: {e}"
+        elif what == "queue":
+            from .jobs import format_jobs, load_jobs
+
+            text = format_jobs(load_jobs())
+        else:
+            return {"ok": False, "message": "unknown"}
+        ok = notify(text)
+        return {"ok": ok, "message": "已推送到手机" if ok else "推送失败（未配置或网络）"}
 
     # ----- history -----
 
