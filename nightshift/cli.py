@@ -47,8 +47,11 @@ def cmd_add(args: argparse.Namespace) -> int:
         permission_mode=args.permission_mode,
         priority=args.priority,
         timeout_min=args.timeout,
+        session_id=args.resume_session,
     )
     print(f"queued job {job.id}")
+    if job.session_id:
+        print(f"  continues session: {job.session_id[:8]}")
     print(f"  cwd: {job.cwd}")
     print("run the queue with:  nightshift run")
     return 0
@@ -75,6 +78,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     from .runner import run_queue
 
     run_queue(when=args.when, once=args.once)
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    from .sessions import list_recent_sessions
+
+    for s in list_recent_sessions(days=args.days):
+        mark = " [INTERRUPTED]" if s.interrupted else ""
+        local = s.last_active.astimezone().strftime("%m-%d %H:%M")
+        print(f"{s.session_id[:8]}  {local}{mark}  {s.title[:60]}")
+        print(f"          {s.cwd}")
     return 0
 
 
@@ -219,7 +233,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="claude permission mode (default from config)")
     sp.add_argument("--priority", type=int, default=5, help="1=first, 9=last")
     sp.add_argument("--timeout", type=int, default=0, help="minutes (0=config)")
+    sp.add_argument("--resume-session", default="", metavar="SESSION_ID",
+                    help="continue an existing session instead of a new one")
     sp.set_defaults(func=cmd_add)
+
+    sp = sub.add_parser("sessions", help="list recent Claude Code sessions")
+    sp.add_argument("--days", type=float, default=7)
+    sp.set_defaults(func=cmd_sessions)
 
     sp = sub.add_parser("queue", help="list queued jobs")
     sp.set_defaults(func=cmd_queue)

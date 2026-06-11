@@ -115,8 +115,14 @@ minute. Left-click opens a local web panel (`127.0.0.1:8377`, configurable
 via `gui.port`) where everything is one click:
 
 - both quota windows with live reset countdowns
+- **recent sessions list** (same titles as the app's "Recents", read from
+  the `ai-title` transcript entries), with rate-limit-interrupted sessions
+  badged — click one and your queued prompt *continues that session*
+  (`claude -p --resume`) instead of starting fresh
+- type bedtime prompts straight into the queue; non-existent directories
+  can be auto-created ("new project" mode)
+- run history with one-click log viewing
 - set / remove the daily warmup time, or learn it from your history
-- type bedtime prompts straight into the queue
 - start / stop the watch autopilot
 - "start with Windows" toggle (creates a Startup shortcut)
 

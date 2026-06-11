@@ -1,8 +1,9 @@
 """Local web settings panel (no tkinter needed - pure stdlib http.server).
 
 Serves a single-page UI on 127.0.0.1 only. The tray icon opens it in your
-browser; everything the CLI can do is one click here: quota bars, daily
-warmup time, bedtime prompt queue, watch autopilot, start-with-Windows.
+browser; everything the CLI can do is one click here: quota bars, recent
+sessions (pick one to continue it), daily warmup time, bedtime prompt
+queue, run history with logs, watch autopilot, start-with-Windows.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -18,7 +20,7 @@ PAGE = """<!doctype html>
 <style>
   :root { color-scheme: dark; }
   body { font-family: "Segoe UI", system-ui, sans-serif; background:#14161a;
-         color:#e8e8e8; max-width:640px; margin:24px auto; padding:0 16px; }
+         color:#e8e8e8; max-width:680px; margin:24px auto; padding:0 16px; }
   h1 { font-size:20px; } h1 small { color:#888; font-weight:normal; font-size:12px; }
   .card { background:#1d2025; border:1px solid #2a2e35; border-radius:10px;
           padding:14px 16px; margin:12px 0; }
@@ -33,14 +35,29 @@ PAGE = """<!doctype html>
   button { background:#2b5ea7; color:#fff; border:0; border-radius:6px;
            padding:6px 12px; cursor:pointer; font-size:13px; }
   button.gray { background:#3a3f48; } button.red { background:#a73b2b; }
+  button.small { padding:3px 8px; font-size:12px; }
   button:hover { filter:brightness(1.15); }
   ul { list-style:none; padding:0; margin:8px 0 0; }
   li { background:#14161a; border:1px solid #2a2e35; border-radius:6px;
        padding:6px 8px; margin:4px 0; font-size:12px; display:flex;
        justify-content:space-between; gap:8px; align-items:center; }
-  li span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ok { color:#5fd068; } .warn { color:#e0a020; }
+  li .grow { flex:1; min-width:0; overflow:hidden; }
+  li .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  li.sel { border-color:#2b5ea7; background:#1a2433; }
+  li.sess { cursor:pointer; }
+  .badge { font-size:11px; padding:1px 6px; border-radius:8px; white-space:nowrap; }
+  .badge.cut { background:#5a2520; color:#ff9d8a; }
+  .badge.res { background:#1f3a5c; color:#9ecbff; }
+  .badge.ok { background:#1f4a28; color:#8ae09a; }
+  .badge.fail { background:#5a2520; color:#ff9d8a; }
+  .ok { color:#5fd068; }
   label { font-size:13px; }
+  pre { background:#0e1013; border:1px solid #2a2e35; border-radius:6px;
+        padding:8px; font-size:11px; white-space:pre-wrap; max-height:240px;
+        overflow:auto; }
+  #target { background:#1a2433; border:1px solid #2b5ea7; border-radius:6px;
+            padding:6px 10px; font-size:12px; margin-bottom:6px;
+            display:flex; justify-content:space-between; align-items:center; }
 </style></head><body>
 <h1>🌙 Claude Nightshift <small id="src"></small></h1>
 
@@ -49,8 +66,37 @@ PAGE = """<!doctype html>
   <div class="bar"><div id="b5" style="width:0%;background:#2e9e4f"></div></div>
   <div>7 天窗口 <b id="u7">…</b> <span class="muted" id="r7"></span></div>
   <div class="bar"><div id="b7" style="width:0%;background:#2e9e4f"></div></div>
-  <div class="row"><button class="gray" onclick="act('/api/refresh')">立即刷新</button>
+  <div class="row"><button class="gray" onclick="act('/api/refresh').then(refresh)">立即刷新</button>
   <button class="gray" onclick="act('/api/warmup_now')">立即预热窗口</button></div>
+</div>
+
+<div class="card"><h2>最近会话 — 点击选中后可在下方队列里"续写"它</h2>
+  <div class="row"><input type="text" id="sfilter" size="28"
+    placeholder="搜索标题 / 目录…" oninput="renderSessions()"></div>
+  <ul id="sessions"><li class="muted">加载中…</li></ul>
+</div>
+
+<div class="card"><h2>睡前任务队列</h2>
+  <div id="target" style="display:none">
+    <span>↻ 续写会话：<b id="tname"></b> <span class="muted" id="tdir"></span></span>
+    <button class="gray small" onclick="clearTarget()">改为新任务</button>
+  </div>
+  <textarea id="prompt" placeholder="把任务描述写在这里。选中上面的会话 = 续写该会话；不选 = 在下面目录里开新任务"></textarea>
+  <div class="row">目录 <input type="text" id="cwd" size="34">
+    <label><input type="checkbox" id="mkdir"> 不存在则创建（新项目）</label></div>
+  <div class="row"><button onclick="addJob()">加入队列</button>
+    <span class="muted" id="addmsg"></span></div>
+  <ul id="queue"></ul>
+</div>
+
+<div class="card"><h2>自动驾驶 — 限额一解除：续跑被打断的会话 + 执行队列</h2>
+  <div class="row"><button id="wbtn" onclick="act('/api/watch/toggle').then(refresh)">启动 watch</button>
+  <span id="wstate" class="muted"></span></div>
+</div>
+
+<div class="card"><h2>执行历史</h2>
+  <ul id="history"><li class="muted">暂无</li></ul>
+  <pre id="logview" style="display:none"></pre>
 </div>
 
 <div class="card"><h2>每日预热 — 睡醒前提前激活 5 小时窗口</h2>
@@ -61,18 +107,6 @@ PAGE = """<!doctype html>
   <div class="muted" id="wstatus"></div>
 </div>
 
-<div class="card"><h2>睡前任务队列</h2>
-  <textarea id="prompt" placeholder="把任务描述写在这里，例如：&#10;按 TODO 重构 data/loader.py，跑测试并修复所有失败"></textarea>
-  <div class="row">目录 <input type="text" id="cwd" size="38">
-    <button onclick="addJob()">加入队列</button></div>
-  <ul id="queue"></ul>
-</div>
-
-<div class="card"><h2>自动驾驶 — 限额一解除：续跑被打断的会话 + 执行队列</h2>
-  <div class="row"><button id="wbtn" onclick="act('/api/watch/toggle').then(refresh)">启动 watch</button>
-  <span id="wstate" class="muted"></span></div>
-</div>
-
 <div class="card"><h2>系统</h2>
   <div class="row"><label><input type="checkbox" id="autostart"
     onchange="post('/api/autostart',{enabled:this.checked})"> 开机自启托盘</label></div>
@@ -81,7 +115,10 @@ PAGE = """<!doctype html>
 
 <script>
 const $ = id => document.getElementById(id);
+const esc = s => (s||'').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const color = u => u==null?'#5a6472':u>=90?'#cc3333':u>=70?'#e07020':u>=50?'#d8a200':'#2e9e4f';
+let SESSIONS = [], TARGET = null;
 async function post(url, body) {
   const r = await fetch(url, {method:'POST', body: JSON.stringify(body||{})});
   return r.json();
@@ -95,6 +132,32 @@ function fmtWin(w, u, b, r) {
   $(r).textContent = w.active ? `· ${w.resets_local} 重置（还有 ${w.countdown}）`
                               : '· 窗口空闲，下一条消息开始计时';
 }
+function setTarget(s) {
+  TARGET = s;
+  $('target').style.display = 'flex';
+  $('tname').textContent = s.title.slice(0, 40);
+  $('tdir').textContent = s.cwd_name;
+  $('cwd').value = s.cwd;
+  renderSessions();
+  $('prompt').focus();
+}
+function clearTarget() { TARGET = null; $('target').style.display='none'; renderSessions(); }
+function renderSessions() {
+  const q = $('sfilter').value.toLowerCase();
+  const items = SESSIONS.filter(s =>
+    !q || s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q));
+  $('sessions').innerHTML = items.map(s => `
+    <li class="sess${TARGET && TARGET.session_id===s.session_id ? ' sel':''}"
+        onclick='setTarget(${JSON.stringify(s).replace(/'/g,"&#39;")})'>
+      <div class="grow"><div class="t">${esc(s.title)}</div>
+        <div class="muted t">${esc(s.cwd_name)} · ${s.last_local}</div></div>
+      ${s.interrupted ? '<span class="badge cut">被限额打断</span>' : ''}
+    </li>`).join('') || '<li class="muted">近 7 天无会话</li>';
+}
+async function loadSessions() {
+  SESSIONS = await (await fetch('/api/sessions')).json();
+  renderSessions();
+}
 async function refresh() {
   const s = await (await fetch('/api/state')).json();
   if (s.usage) {
@@ -105,8 +168,9 @@ async function refresh() {
   if (!$('wtime').matches(':focus')) $('wtime').value = s.warmup_time;
   $('wstatus').textContent = s.schedule;
   $('queue').innerHTML = s.queue.map(j =>
-    `<li><span title="${j.prompt}">${j.prompt}</span><span class="muted">${j.cwd_name}</span>
-     <button class="red" onclick="post('/api/queue/remove',{id:'${j.id}'}).then(refresh)">删</button></li>`).join('')
+    `<li><div class="grow"><div class="t" title="${esc(j.prompt)}">${esc(j.prompt)}</div>
+     <div class="muted t">${j.session_short ? '↻ 续写 '+j.session_short : '新会话'} · ${esc(j.cwd_name)}</div></div>
+     <button class="red small" onclick="post('/api/queue/remove',{id:'${j.id}'}).then(refresh)">删</button></li>`).join('')
     || '<li class="muted">队列为空</li>';
   $('wbtn').textContent = s.watch.running ? '停止 watch' : '启动 watch';
   $('wstate').textContent = s.watch.running ? `运行中 (PID ${s.watch.pid})` : '未运行';
@@ -114,6 +178,21 @@ async function refresh() {
   $('autostart').checked = s.autostart;
   $('datadir').textContent = s.data_dir;
   if (!$('cwd').value) $('cwd').value = s.home;
+  loadHistory();
+}
+async function loadHistory() {
+  const h = await (await fetch('/api/history')).json();
+  $('history').innerHTML = h.map(it => `
+    <li><div class="grow"><div class="t" title="${esc(it.prompt)}">${esc(it.prompt)}</div>
+      <div class="muted">${it.when}</div></div>
+      <span class="badge ${it.status==='done'?'ok':'fail'}">${it.status==='done'?'完成':'失败'}</span>
+      <button class="gray small" onclick="showLog('${it.id}','${it.status}')">日志</button></li>`).join('')
+    || '<li class="muted">暂无</li>';
+}
+async function showLog(id, status) {
+  const r = await (await fetch(`/api/joblog?id=${id}&status=${status}`)).json();
+  $('logview').style.display = 'block';
+  $('logview').textContent = r.text;
 }
 async function applyWarmup() {
   const r = await post('/api/warmup/apply', {time: $('wtime').value.trim()});
@@ -128,10 +207,16 @@ async function suggest() {
 async function addJob() {
   const p = $('prompt').value.trim();
   if (!p) return;
-  await post('/api/queue/add', {prompt: p, cwd: $('cwd').value.trim()});
-  $('prompt').value = ''; refresh();
+  const r = await post('/api/queue/add', {
+    prompt: p, cwd: $('cwd').value.trim(),
+    session_id: TARGET ? TARGET.session_id : '',
+    create_dir: $('mkdir').checked,
+  });
+  $('addmsg').textContent = r.ok ? '已加入' : (r.message || '失败');
+  if (r.ok) { $('prompt').value = ''; clearTarget(); refresh(); }
 }
-refresh(); setInterval(refresh, 30000);
+refresh(); loadSessions();
+setInterval(refresh, 30000); setInterval(loadSessions, 120000);
 </script></body></html>
 """
 
@@ -157,11 +242,20 @@ class PanelHandler(BaseHTTPRequestHandler):
         self._send(code, _json_bytes(obj), "application/json; charset=utf-8")
 
     def do_GET(self) -> None:
-        if self.path in ("/", "/index.html"):
+        url = urlparse(self.path)
+        if url.path in ("/", "/index.html"):
             self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
-        elif self.path == "/api/state":
+        elif url.path == "/api/state":
             self._send_json(self.app.state())
-        elif self.path == "/api/warmup/suggest":
+        elif url.path == "/api/sessions":
+            self._send_json(self.app.sessions())
+        elif url.path == "/api/history":
+            self._send_json(self.app.history())
+        elif url.path == "/api/joblog":
+            q = parse_qs(url.query)
+            self._send_json(self.app.job_log(
+                q.get("id", [""])[0], q.get("status", ["done"])[0]))
+        elif url.path == "/api/warmup/suggest":
             self._send_json(self.app.suggest_warmup())
         else:
             self._send_json({"error": "not found"}, 404)
@@ -179,7 +273,9 @@ class PanelHandler(BaseHTTPRequestHandler):
                 body.get("time", "")),
             "/api/warmup/remove": self.app.remove_warmup,
             "/api/queue/add": lambda: self.app.add_job(
-                body.get("prompt", ""), body.get("cwd", "")),
+                body.get("prompt", ""), body.get("cwd", ""),
+                session_id=body.get("session_id", ""),
+                create_dir=bool(body.get("create_dir"))),
             "/api/queue/remove": lambda: self.app.remove_job(
                 body.get("id", "")),
             "/api/watch/toggle": self.app.toggle_watch,

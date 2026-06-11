@@ -31,6 +31,9 @@ class Job:
     priority: int = 5  # 1 = first, 9 = last
     created_at: float = field(default_factory=time.time)
     timeout_min: int = 0  # 0 = config default
+    # When set, the job continues an existing session (claude -p --resume)
+    # instead of starting a fresh one.
+    session_id: str = ""
 
     @property
     def path(self) -> Path:
@@ -38,7 +41,8 @@ class Job:
 
 
 def new_job(prompt: str, cwd: str, model: str = "", permission_mode: str = "",
-            priority: int = 5, timeout_min: int = 0) -> Job:
+            priority: int = 5, timeout_min: int = 0,
+            session_id: str = "") -> Job:
     job = Job(
         id=time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
         prompt=prompt,
@@ -47,6 +51,7 @@ def new_job(prompt: str, cwd: str, model: str = "", permission_mode: str = "",
         permission_mode=permission_mode,
         priority=priority,
         timeout_min=timeout_min,
+        session_id=session_id,
     )
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     job.path.write_text(
@@ -96,6 +101,7 @@ def format_jobs(jobs: list[Job]) -> str:
     for i, j in enumerate(jobs, 1):
         preview = j.prompt.replace("\n", " ")[:70]
         created = time.strftime("%m-%d %H:%M", time.localtime(j.created_at))
-        lines.append(f"  {i}. [{j.id}] p{j.priority} {created}  {preview}")
+        tag = f" resume:{j.session_id[:8]}" if j.session_id else ""
+        lines.append(f"  {i}. [{j.id}] p{j.priority} {created}{tag}  {preview}")
         lines.append(f"     cwd: {j.cwd}")
     return "\n".join(lines)

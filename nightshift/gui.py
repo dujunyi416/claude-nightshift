@@ -149,7 +149,8 @@ class App:
             "schedule": self._schedule_text or self._load_schedule_text(),
             "queue": [
                 {"id": j.id, "prompt": j.prompt.replace("\n", " ")[:80],
-                 "cwd_name": Path(j.cwd).name}
+                 "cwd_name": Path(j.cwd).name,
+                 "session_short": j.session_id[:8] if j.session_id else ""}
                 for j in load_jobs()
             ],
             "watch": {"running": running,
@@ -209,16 +210,83 @@ class App:
         self.refresh_usage(force=True)
         return {"ok": ok}
 
+    # ----- sessions -----
+
+    def sessions(self) -> list[dict]:
+        from .sessions import list_recent_sessions
+
+        out = []
+        for s in list_recent_sessions(days=7, limit=20):
+            out.append({
+                "session_id": s.session_id,
+                "title": s.title,
+                "cwd": s.cwd,
+                "cwd_name": Path(s.cwd).name,
+                "last_local": f"{s.last_active.astimezone():%m-%d %H:%M}",
+                "interrupted": s.interrupted,
+                "error_text": s.error_text,
+            })
+        return out
+
+    # ----- history -----
+
+    def history(self) -> list[dict]:
+        import json as _json
+
+        from .jobs import DONE_DIR, FAILED_DIR
+
+        items = []
+        for d, status in ((DONE_DIR, "done"), (FAILED_DIR, "failed")):
+            if not d.exists():
+                continue
+            for p in d.glob("*.json"):
+                try:
+                    data = _json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, _json.JSONDecodeError):
+                    continue
+                items.append({
+                    "id": data.get("id", p.stem),
+                    "prompt": (data.get("prompt") or "").replace("\n", " ")[:70],
+                    "status": status,
+                    "mtime": p.stat().st_mtime,
+                })
+        items.sort(key=lambda x: x["mtime"], reverse=True)
+        for it in items:
+            it["when"] = time.strftime("%m-%d %H:%M", time.localtime(it.pop("mtime")))
+        return items[:10]
+
+    def job_log(self, job_id: str, status: str) -> dict:
+        from .jobs import DONE_DIR, FAILED_DIR
+
+        d = DONE_DIR if status == "done" else FAILED_DIR
+        # job_id comes from our own directory listing, but never trust it
+        # as a path component.
+        if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
+            return {"ok": False, "text": "bad id"}
+        p = d / f"{job_id}.log"
+        if not p.exists():
+            return {"ok": False, "text": "log not found"}
+        return {"ok": True, "text": p.read_text(encoding="utf-8",
+                                                errors="replace")[-8000:]}
+
     # ----- queue -----
 
-    def add_job(self, prompt: str, cwd: str) -> dict:
+    def add_job(self, prompt: str, cwd: str, session_id: str = "",
+                create_dir: bool = False) -> dict:
         prompt = prompt.strip()
         if not prompt:
             return {"ok": False, "message": "提示词为空"}
         cwd = cwd.strip() or str(Path.home())
         if not Path(cwd).is_dir():
-            return {"ok": False, "message": f"目录不存在: {cwd}"}
-        job = new_job(prompt, cwd=cwd)
+            if create_dir:
+                try:
+                    Path(cwd).mkdir(parents=True)
+                except OSError as e:
+                    return {"ok": False, "message": f"创建目录失败: {e}"}
+            else:
+                return {"ok": False,
+                        "message": f"目录不存在: {cwd}（勾选'自动创建'可新建项目）"}
+        job = new_job(prompt, cwd=cwd, session_id=session_id)
         return {"ok": True, "id": job.id}
 
     def remove_job(self, job_id: str) -> dict:

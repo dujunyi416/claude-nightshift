@@ -82,7 +82,10 @@ def _wait_for_reset(poll_sec: float) -> None:
 
 def _build_cmd(job: Job, cfg: dict) -> list[str]:
     claude = find_claude_cmd(cfg)
-    cmd = [claude, "-p", job.prompt]
+    cmd = [claude, "-p"]
+    if job.session_id:
+        cmd += ["--resume", job.session_id]
+    cmd.append(job.prompt)
     if job.model:
         cmd += ["--model", job.model]
     mode = job.permission_mode or cfg["runner"]["permission_mode"]
