@@ -49,9 +49,18 @@ def _run_ps(command: str) -> subprocess.CompletedProcess:
 
 
 def register_daily(kind: str, hhmm: str, extra_args: str = "") -> bool:
-    """Register (or replace) a daily task. kind: 'warmup' or 'run'."""
+    """Register (or replace) a daily task. kind: 'warmup' or 'run'.
+
+    The task name intentionally omits the time so that changing the time
+    overwrites the same task (via -Force) instead of leaving an orphan."""
+    try:
+        hh, mm = hhmm.split(":")
+        hhmm = f"{int(hh):02d}:{int(mm):02d}"
+    except (ValueError, AttributeError):
+        print(f"invalid time {hhmm!r}; expected HH:MM")
+        return False
     wrapper = _wrapper_cmd(kind, extra_args)
-    task_name = f"{TASK_PREFIX} {kind} {hhmm.replace(':', '')}"
+    task_name = f"{TASK_PREFIX} {kind}"
     ps = (
         f"$action = New-ScheduledTaskAction -Execute 'cmd.exe' "
         f"-Argument '/c \"\"{wrapper}\"\"';"
@@ -75,8 +84,8 @@ def register_daily(kind: str, hhmm: str, extra_args: str = "") -> bool:
 
 def unregister_all() -> int:
     ps = (
-        f"$tasks = Get-ScheduledTask -TaskName '{TASK_PREFIX}*' "
-        f"-ErrorAction SilentlyContinue;"
+        f"$tasks = @(Get-ScheduledTask -TaskName '{TASK_PREFIX}*' "
+        f"-ErrorAction SilentlyContinue);"
         f"$tasks | Unregister-ScheduledTask -Confirm:$false;"
         f"Write-Output $tasks.Count"
     )

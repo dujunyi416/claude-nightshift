@@ -303,7 +303,19 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _force_utf8_output() -> None:
+    """On Chinese/legacy Windows the console defaults to GBK, and printing a
+    session title with a non-GBK char (e.g. \\xa0) raises UnicodeEncodeError
+    and crashes the command. Emit UTF-8 with replacement instead."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # already redirected/wrapped, or doesn't support it
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_output()
     ensure_dirs()
     args = build_parser().parse_args(argv)
     return args.func(args)

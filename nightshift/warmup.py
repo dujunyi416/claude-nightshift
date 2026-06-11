@@ -29,7 +29,9 @@ def _log(msg: str) -> None:
 
 
 def warmup(force: bool = False) -> bool:
-    """Send a minimal ping to start the 5h window. Returns True if pinged."""
+    """Ensure the 5h window is active. Returns True on success - which
+    includes the no-op case where a window is already active (the goal is
+    met) - and False only when an actual ping attempt fails."""
     cfg = load_config()
     wcfg = cfg["warmup"]
 
@@ -43,7 +45,7 @@ def warmup(force: bool = False) -> bool:
                     f"skip: 5h window already active "
                     f"({usage.five_hour.utilization:.0f}% used, resets {local})"
                 )
-                return False
+                return True  # goal already met - not a failure
         except RuntimeError as e:
             _log(f"quota check failed ({e}); pinging anyway")
 
