@@ -198,31 +198,46 @@ def watch(poll_sec: float = 0) -> None:
     resume_cfg = cfg["resume"]
     start_polling()  # two-way telegram control, no-op if unconfigured
     last_keepwarm = 0.0
-    _log(f"watch started (poll {poll_sec:.0f}s, Ctrl+C to stop)")
+    cycle = 0
+    _log(f"watch started (poll {poll_sec:.0f}s, lookback "
+         f"{resume_cfg['lookback_hours']}h, idle gate {resume_cfg['idle_min']}m, "
+         f"Ctrl+C to stop)")
 
     while True:
+        cycle += 1
         last_keepwarm = maybe_keepwarm(last_keepwarm)
         sessions = (
-            pending_resumes(resume_cfg["lookback_hours"])
+            pending_resumes(resume_cfg["lookback_hours"], None,
+                            resume_cfg.get("idle_min", 5),
+                            resume_cfg.get("detect_stalled", True))
             if resume_cfg.get("enabled", True) else []
         )
+        if not resume_cfg.get("auto_stalled", True):
+            sessions = [s for s in sessions if s.confidence == "high"]
         jobs = load_jobs()
+
+        usage = _quota_or_none()
+        util = usage.five_hour.utilization if usage else None
+        # Heartbeat so the loop is never a silent black box.
+        _log(f"cycle {cycle}: 5h={util if util is not None else '?'}% "
+             f"interrupted={len(sessions)} queued={len(jobs)}")
+
         if not sessions and not jobs:
             time.sleep(poll_sec)
             continue
 
         if sessions:
             _log(format_pending(sessions))
-        usage = _quota_or_none()
-        if usage and usage.five_hour.active and \
-                (usage.five_hour.utilization or 0) >= stop_util:
+        if usage and usage.five_hour.active and (util or 0) >= stop_util:
+            _log(f"5h at {util:.0f}% (>= {stop_util}); waiting for reset")
             _wait_for_reset(poll_sec)
 
         for s in sessions[: resume_cfg.get("max_sessions", 3)]:
             resume_session(s, cfg)
             usage = _quota_or_none()
             if usage and usage.five_hour.exhausted:
-                break  # the resume itself burned the window; wait again
+                _log("window exhausted by resume; waiting for reset")
+                _wait_for_reset(poll_sec)
 
         if load_jobs():
             run_queue(when="now")

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .resume import CLAUDE_PROJECTS, _entry_is_limit_error, _parse_ts, _tail_entries
+from .resume import CLAUDE_PROJECTS, classify_transcript
 
 
 @dataclass
@@ -25,6 +25,9 @@ class SessionInfo:
     last_active: datetime
     interrupted: bool
     error_text: str
+    # "" (running/done), "limit", or "stalled"
+    reason: str = ""
+    confidence: str = ""
     # Tiny throwaway sessions (warmup pings, one-liner tests) the panel
     # hides by default.
     trivial: bool = False
@@ -96,18 +99,16 @@ def list_recent_sessions(days: float = 7, limit: int = 20,
     for mtime, path in paths[:limit]:
         session_id, title, cwd = _head_info(path)
         last_active = mtime
-        interrupted, error_text = False, ""
-        entries = _tail_entries(path)
-        for entry in reversed(entries):
-            if entry.get("type") not in ("assistant", "user"):
-                continue
-            err = _entry_is_limit_error(entry)
-            if err:
-                interrupted, error_text = True, err[:100]
-                last_active = _parse_ts(entry) or mtime
-            if entry.get("cwd"):
-                cwd = entry["cwd"]
-            break
+        interrupted, error_text, reason, confidence = False, "", "", ""
+        # idle_min=2: surface interruptions quickly, but still skip a session
+        # actively writing right now (it updates every few seconds).
+        info = classify_transcript(path, idle_min_threshold=2.0)
+        if info is not None:
+            interrupted = True
+            error_text = info.error_text
+            reason, confidence = info.reason, info.confidence
+            last_active = info.interrupted_at
+            cwd = info.cwd or cwd
         if not title:
             title = f"(untitled) {session_id[:8]}"
         try:
@@ -121,6 +122,7 @@ def list_recent_sessions(days: float = 7, limit: int = 20,
             cwd=cwd or str(Path.home()),
             last_active=last_active,
             interrupted=interrupted, error_text=error_text,
+            reason=reason, confidence=confidence,
             trivial=trivial,
         ))
     return out

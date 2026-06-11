@@ -1,22 +1,34 @@
-"""Auto-resume sessions that were cut off by the rate limit.
+"""Auto-resume sessions that were cut off (by the rate limit or otherwise).
 
-When Claude Code hits your 5h limit mid-task, it appends an entry like
+Detecting an interruption is trickier than it sounds. Older Claude Code
+versions appended an explicit marker when the limit hit mid-task:
 
-    {"type": "assistant", "isApiErrorMessage": true, "apiErrorStatus": ...,
-     "sessionId": "...", "cwd": "...",
+    {"type": "assistant", "isApiErrorMessage": true,
      "message": {"content": [{"type": "text",
         "text": "You've hit your session limit · resets 4am (...)"}]}}
 
-to the session transcript and stops. We scan recent transcripts for
-sessions whose *tail* contains such an entry with no real progress after
-it, then - once the window resets - continue each one headlessly:
+but the current app/CLI often does NOT write that marker for interactive
+sessions - the transcript simply STOPS after the last assistant turn whose
+`stop_reason` is "tool_use" (the model asked to run a tool and the turn
+never completed, because the limit cut it off). So we detect interruptions
+two ways:
 
-    claude -p --resume <sessionId> "<continue prompt>"   (in its original cwd)
+  * high confidence: the trailing entry is an isApiErrorMessage limit marker
+  * medium confidence: the session is cut off mid-action (last meaningful
+    entry is an assistant `tool_use` with no following tool_result, or a
+    tool_result with no following assistant turn) AND the file has been
+    idle for a few minutes (so we never touch a session that's actively
+    running right now - including this very one).
 
-A state file remembers what we already resumed so the same interruption is
-never resumed twice; if the resumed run hits the limit again, a fresh error
-entry appears and the next reset picks it up again - the task keeps
-crawling forward window by window until it finishes.
+Resume continues each in its ORIGINAL working directory (Claude scopes
+`--resume <id>` to the project of the cwd, so the cwd must match):
+
+    claude -p --resume <sessionId> "<continue prompt>"
+
+A state file records what we resumed, keyed by the interruption timestamp,
+so the same cutoff is never resumed twice; if the resumed run hits the
+limit again, a newer interruption timestamp lets the next reset pick it up
+- the task crawls forward window by window until it finishes.
 """
 
 from __future__ import annotations
@@ -52,6 +64,11 @@ def _log(msg: str) -> None:
     print(line, flush=True)
 
 
+# Transcript entry types that are not real conversation turns.
+_NON_TURN = {"summary", "ai-title", "mode", "permission-mode", "attachment",
+             "file-history-snapshot", "last-prompt", "queue-operation"}
+
+
 @dataclass
 class InterruptedSession:
     session_id: str
@@ -59,6 +76,9 @@ class InterruptedSession:
     interrupted_at: datetime
     error_text: str
     transcript: Path
+    reason: str = "limit"          # "limit" | "stalled"
+    confidence: str = "high"       # "high" | "medium"
+    idle_min: float = 0.0
 
 
 def _entry_is_limit_error(entry: dict) -> str | None:
@@ -108,44 +128,99 @@ def _parse_ts(entry: dict) -> datetime | None:
         return None
 
 
-def scan_interrupted(lookback_hours: float = 24,
-                     projects_dir: Path | None = None) -> list[InterruptedSession]:
-    """Find sessions whose last activity is a rate-limit cutoff."""
+def _has_tool_use(entry: dict) -> bool:
+    """True if an assistant entry contains a tool_use block (i.e. it asked
+    to run a tool). Robust to both stop_reason and content inspection."""
+    msg = entry.get("message") or {}
+    if msg.get("stop_reason") == "tool_use":
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        return any(isinstance(b, dict) and b.get("type") == "tool_use"
+                   for b in content)
+    return False
+
+
+def classify_transcript(path: Path, idle_min_threshold: float,
+                        now: datetime | None = None) -> InterruptedSession | None:
+    """Classify a single transcript; return an InterruptedSession if it
+    looks cut off, else None. `idle_min_threshold` guards against touching
+    sessions that are still actively running."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    except OSError:
+        return None
+    idle_min = (now - mtime).total_seconds() / 60
+    if idle_min < idle_min_threshold:
+        return None  # still active - never resume from under a live session
+
+    entries = _tail_entries(path)
+    if not entries:
+        return None
+
+    # Find the last real conversation turn (skip snapshots/titles/etc).
+    last = None
+    for entry in reversed(entries):
+        if entry.get("type") in ("assistant", "user"):
+            last = entry
+            break
+    if last is None:
+        return None
+
+    sid = last.get("sessionId") or path.stem
+    cwd = last.get("cwd") or str(Path.home())
+    when = _parse_ts(last) or mtime
+
+    err = _entry_is_limit_error(last)
+    if err:
+        return InterruptedSession(sid, cwd, when, err[:120], path,
+                                  reason="limit", confidence="high",
+                                  idle_min=idle_min)
+
+    # Cut off mid-action: assistant asked to run a tool but the turn never
+    # completed, or a tool result came back with no assistant follow-up.
+    if last.get("type") == "assistant" and _has_tool_use(last):
+        return InterruptedSession(sid, cwd, when,
+                                  "cut off mid-action (tool_use)", path,
+                                  reason="stalled", confidence="medium",
+                                  idle_min=idle_min)
+    if last.get("type") == "user":
+        content = (last.get("message") or {}).get("content")
+        is_tool_result = isinstance(content, list) and any(
+            isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in content)
+        if is_tool_result:
+            return InterruptedSession(sid, cwd, when,
+                                      "cut off after tool result", path,
+                                      reason="stalled", confidence="medium",
+                                      idle_min=idle_min)
+    return None
+
+
+def scan_interrupted(lookback_hours: float = 48,
+                     projects_dir: Path | None = None,
+                     idle_min: float = 5.0,
+                     detect_stalled: bool = True) -> list[InterruptedSession]:
+    """Find recently-cut-off sessions (limit markers + mid-action stalls)."""
     root = projects_dir or CLAUDE_PROJECTS
     if not root.exists():
         return []
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=lookback_hours)
     found = []
     for path in root.glob("*/*.jsonl"):
         try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            if datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < cutoff:
+                continue
         except OSError:
             continue
-        if mtime < cutoff:
+        info = classify_transcript(path, idle_min, now)
+        if info is None:
             continue
-        entries = _tail_entries(path)
-        if not entries:
+        if info.reason == "stalled" and not detect_stalled:
             continue
-        # Walk backwards: the limit error must be the last *meaningful*
-        # event. Anything substantive after it means the session already
-        # moved on (e.g. the user resumed it interactively).
-        for entry in reversed(entries):
-            etype = entry.get("type")
-            if etype not in ("assistant", "user"):
-                continue  # summaries, file-history snapshots, etc.
-            err = _entry_is_limit_error(entry)
-            if err:
-                when = _parse_ts(entry) or mtime
-                if when < cutoff:
-                    break
-                found.append(InterruptedSession(
-                    session_id=entry.get("sessionId") or path.stem,
-                    cwd=entry.get("cwd") or str(Path.home()),
-                    interrupted_at=when,
-                    error_text=err[:120],
-                    transcript=path,
-                ))
-            break  # only inspect the last meaningful entry
+        found.append(info)
     found.sort(key=lambda s: s.interrupted_at)
     return found
 
@@ -162,12 +237,15 @@ def _save_state(state: dict) -> None:
     RESUME_STATE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
-def pending_resumes(lookback_hours: float = 24,
-                    projects_dir: Path | None = None) -> list[InterruptedSession]:
+def pending_resumes(lookback_hours: float = 48,
+                    projects_dir: Path | None = None,
+                    idle_min: float = 5.0,
+                    detect_stalled: bool = True) -> list[InterruptedSession]:
     """Interrupted sessions we haven't resumed since their interruption."""
     state = _load_state()
     pending = []
-    for s in scan_interrupted(lookback_hours, projects_dir):
+    for s in scan_interrupted(lookback_hours, projects_dir, idle_min,
+                              detect_stalled):
         last = state.get(s.session_id, 0)
         if last >= s.interrupted_at.timestamp():
             continue  # already resumed this particular cutoff
@@ -175,16 +253,17 @@ def pending_resumes(lookback_hours: float = 24,
     return pending
 
 
-def resume_session(s: InterruptedSession, cfg: dict | None = None) -> bool:
+def resume_session(s: InterruptedSession, cfg: dict | None = None,
+                   prompt: str = "") -> bool:
     cfg = cfg or load_config()
     rcfg = cfg["resume"]
     claude = find_claude_cmd(cfg)
-    cmd = [claude, "-p", "--resume", s.session_id, rcfg["prompt"]]
+    cmd = [claude, "-p", "--resume", s.session_id, prompt or rcfg["prompt"]]
     mode = rcfg.get("permission_mode", "")
     if mode:
         cmd += ["--permission-mode", mode]
     cwd = s.cwd if Path(s.cwd).is_dir() else str(Path.home())
-    _log(f"resuming {s.session_id[:8]} in {cwd}")
+    _log(f"resuming {s.session_id[:8]} ({s.reason}/{s.confidence}) in {cwd}")
     _log(f"  (was: {s.error_text})")
 
     # Mark as attempted *before* running so a crash can't cause a loop.
@@ -227,7 +306,8 @@ def format_pending(sessions: list[InterruptedSession]) -> str:
     lines = [f"{len(sessions)} interrupted session(s):"]
     for s in sessions:
         local = s.interrupted_at.astimezone().strftime("%m-%d %H:%M")
-        lines.append(f"  {s.session_id[:8]}  cut off {local}  "
+        lines.append(f"  {s.session_id[:8]}  cut off {local} "
+                     f"[{s.reason}/{s.confidence}, idle {s.idle_min:.0f}m]  "
                      f"cwd: {Path(s.cwd).name}")
         lines.append(f"           {s.error_text}")
     return "\n".join(lines)

@@ -123,7 +123,11 @@ PAGE = """<!doctype html>
   <div class="row">Bot Token <input type="text" id="tgtoken" size="34"
     placeholder="123456:ABC-...（@BotFather 创建）"></div>
   <div class="row">Chat ID <input type="text" id="tgchat" size="14"
-    placeholder="如 5021..."> 默认目录 <input type="text" id="tgcwd" size="22"></div>
+    placeholder="如 5021..."></div>
+  <div class="row">默认目录 <input type="text" id="tgcwd" size="40"
+    placeholder="手机发文字时，任务在哪个项目目录跑（如 D:\\btc_quant）"></div>
+  <div class="muted">默认目录 = 你在手机上直接发一句话时，它当作任务在哪个项目里执行。
+    填你最常做的项目路径；留空则用用户主目录。/status /queue /resume 等指令不受影响。</div>
   <div class="row"><button onclick="applyTelegram()">保存并测试</button>
     <span class="muted" id="tgmsg"></span></div>
 </div>
@@ -175,13 +179,29 @@ function renderSessions() {
     <li style="background:none;border:none;padding:8px 0 0;font-size:12px">
       <b style="color:#9ecbff">📁 ${esc(dir)}</b>
       <span class="muted">${ss.length} 个对话</span></li>` +
-    ss.map(s => `
+    ss.map(s => {
+      const j = JSON.stringify(s).replace(/'/g,"&#39;");
+      const badge = s.interrupted
+        ? (s.reason==='limit'
+            ? '<span class="badge cut">限额打断</span>'
+            : '<span class="badge cut">中断(动作未完成)</span>')
+        : '';
+      const resumeBtn = s.interrupted
+        ? `<button class="gray small" onclick='event.stopPropagation();resumeNow(${j})'>续跑</button>`
+        : '';
+      return `
     <li class="sess${TARGET && TARGET.session_id===s.session_id ? ' sel':''}"
-        onclick='setTarget(${JSON.stringify(s).replace(/'/g,"&#39;")})'>
+        onclick='setTarget(${j})'>
       <div class="grow"><div class="t">${esc(s.title)}</div>
         <div class="muted t">${s.last_local}</div></div>
-      ${s.interrupted ? '<span class="badge cut">被限额打断</span>' : ''}
-    </li>`).join('')).join('') || '<li class="muted">近 7 天无对话</li>';
+      ${badge}${resumeBtn}
+    </li>`;}).join('')).join('') || '<li class="muted">近 7 天无对话</li>';
+}
+async function resumeNow(s) {
+  const extra = prompt(`续跑「${s.title.slice(0,30)}」\n\n可选：补充一句指示（留空=用默认"继续完成剩余工作"）：`, '');
+  if (extra === null) return;  // cancelled
+  const r = await post('/api/resume_now', {session_id: s.session_id, prompt: extra});
+  alert(r.message);
 }
 function applyKeepwarm() {
   post('/api/keepwarm', {enabled: $('kwon').checked,
@@ -337,6 +357,8 @@ class PanelHandler(BaseHTTPRequestHandler):
             "/api/queue/remove": lambda: self.app.remove_job(
                 body.get("id", "")),
             "/api/watch/toggle": self.app.toggle_watch,
+            "/api/resume_now": lambda: self.app.resume_now(
+                body.get("session_id", ""), body.get("prompt", "")),
             "/api/keepwarm": lambda: self.app.set_keepwarm(
                 bool(body.get("enabled")), body.get("start", "07:00"),
                 body.get("end", "23:00")),

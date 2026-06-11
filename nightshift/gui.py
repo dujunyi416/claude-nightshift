@@ -251,10 +251,56 @@ class App:
                 "cwd_name": Path(s.cwd).name,
                 "last_local": f"{s.last_active.astimezone():%m-%d %H:%M}",
                 "interrupted": s.interrupted,
+                "reason": s.reason,
+                "confidence": s.confidence,
                 "error_text": s.error_text,
                 "trivial": s.trivial,
             })
         return out
+
+    def resume_now(self, session_id: str, prompt: str = "") -> dict:
+        """One-click resume of a specific session from the panel."""
+        from .resume import classify_transcript
+        from .sessions import CLAUDE_PROJECTS
+
+        if not session_id:
+            return {"ok": False, "message": "缺少会话 ID"}
+        matches = list(CLAUDE_PROJECTS.glob(f"*/{session_id}*.jsonl"))
+        if not matches:
+            return {"ok": False, "message": "找不到该会话的本地记录"}
+        # idle_min=0: explicit user action, resume regardless of recency.
+        info = classify_transcript(matches[0], idle_min_threshold=0.0)
+        if info is None:
+            from .resume import InterruptedSession
+
+            # Not detected as interrupted, but the user asked - build a
+            # minimal descriptor from the transcript's recorded cwd.
+            import json as _json
+
+            cwd = str(Path.home())
+            try:
+                for line in matches[0].read_text(
+                        encoding="utf-8", errors="replace").splitlines():
+                    d = _json.loads(line)
+                    if d.get("cwd"):
+                        cwd = d["cwd"]
+                        break
+            except (OSError, _json.JSONDecodeError):
+                pass
+            from datetime import datetime, timezone
+
+            info = InterruptedSession(
+                session_id, cwd, datetime.now(timezone.utc),
+                "manual resume", matches[0], reason="manual",
+                confidence="manual")
+
+        def work():
+            from .resume import resume_session
+
+            resume_session(info, prompt=prompt)
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "message":
+                f"已在后台续跑 {session_id[:8]}（日志见 logs/resume-*.log）"}
 
     # ----- keepwarm / telegram settings -----
 

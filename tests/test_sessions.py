@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,12 +11,19 @@ os.environ.setdefault("NIGHTSHIFT_HOME", tempfile.mkdtemp(prefix="ns_test_"))
 from nightshift.sessions import list_recent_sessions  # noqa: E402
 
 
-def _entry(ts, etype="assistant", text="", is_error=False, sid="sess-1"):
+def _entry(ts, etype="assistant", text="", is_error=False, sid="sess-1",
+           tool_use=False):
+    if tool_use:
+        content = [{"type": "tool_use", "name": "Bash", "input": {}}]
+        stop = "tool_use"
+    else:
+        content = [{"type": "text", "text": text}]
+        stop = "end_turn"
     return {
         "type": etype, "sessionId": sid, "cwd": "C:\\proj",
         "timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
         "isApiErrorMessage": is_error,
-        "message": {"role": etype, "content": [{"type": "text", "text": text}]},
+        "message": {"role": etype, "content": content, "stop_reason": stop},
     }
 
 
@@ -24,7 +32,7 @@ class TestSessions(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="ns_sess_"))
         self.now = datetime.now(timezone.utc)
 
-    def _write(self, name, entries, title=None):
+    def _write(self, name, entries, title=None, age_min=30):
         proj = self.root / "proj"
         proj.mkdir(parents=True, exist_ok=True)
         lines = []
@@ -32,8 +40,10 @@ class TestSessions(unittest.TestCase):
             lines.append(json.dumps(
                 {"type": "ai-title", "aiTitle": title, "sessionId": name}))
         lines += [json.dumps(e) for e in entries]
-        (proj / f"{name}.jsonl").write_text("\n".join(lines) + "\n",
-                                            encoding="utf-8")
+        path = proj / f"{name}.jsonl"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        old = time.time() - age_min * 60
+        os.utime(path, (old, old))
 
     def test_title_from_ai_title(self):
         self._write("s1", [_entry(self.now, text="hi", sid="s1")],

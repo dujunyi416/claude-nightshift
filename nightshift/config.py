@@ -41,10 +41,24 @@ DEFAULTS: dict[str, Any] = {
         # Auto-resume sessions that were cut off by the rate limit.
         "enabled": True,
         # Only consider interruptions newer than this.
-        "lookback_hours": 24,
+        "lookback_hours": 48,
+        # Don't touch a transcript modified within this many minutes - it may
+        # still be actively running. This is what keeps the live session you
+        # are typing in from being resumed out from under you.
+        "idle_min": 5,
+        # Also treat "cut off mid-action" (last turn is an unfinished
+        # tool_use, no limit marker) as interrupted. The current app usually
+        # does NOT write a limit marker, so without this auto-resume rarely
+        # fires. Risk: a session you deliberately stopped mid-action could be
+        # resumed; the idle gate + max_sessions cap limit the blast radius.
+        "detect_stalled": True,
+        # In watch, auto-resume medium-confidence (stalled) sessions too.
+        # Set False to auto-resume only high-confidence limit markers and
+        # leave stalls for one-click resume in the panel.
+        "auto_stalled": True,
         "prompt": (
-            "You were interrupted by the usage limit. Continue from where "
-            "you left off and finish the remaining work."
+            "You were interrupted (usage limit or a cut-off mid-action). "
+            "Continue from where you left off and finish the remaining work."
         ),
         "permission_mode": "acceptEdits",
         # Safety cap per watch cycle.
