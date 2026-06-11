@@ -174,6 +174,13 @@ def cmd_statusline(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tray(args: argparse.Namespace) -> int:
+    from .gui import run_gui
+
+    run_gui(open_browser=not args.no_open)
+    return 0
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     cfg = load_config()
     if not CONFIG_PATH.exists():
@@ -262,6 +269,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("statusline",
                         help="(for Claude Code settings.json) statusline hook")
     sp.set_defaults(func=cmd_statusline)
+
+    sp = sub.add_parser("tray", aliases=["gui"],
+                        help="system tray icon + web settings panel "
+                             "(tray icon needs: pip install pystray pillow)")
+    sp.add_argument("--no-open", action="store_true",
+                    help="don't auto-open the browser (used by autostart)")
+    sp.set_defaults(func=cmd_tray)
 
     sp = sub.add_parser("config", help="show config path and current values")
     sp.set_defaults(func=cmd_config)

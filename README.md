@@ -55,6 +55,7 @@ Optionally `pip install -e .` to get a global `nightshift` command.
 | `nightshift learn` | analyze your usage rhythm, suggest a warmup time |
 | `nightshift schedule --warmup 07:00` | daily Windows task (wakes PC from sleep) |
 | `nightshift schedule --auto` | learn the warmup time from your history |
+| `nightshift tray` | system tray icon + web settings panel |
 | `nightshift config` | show config file path and current settings |
 
 ## The three workflows
@@ -100,6 +101,27 @@ such a cutoff, and once quota returns it continues each one with
 the prompt queue. A state file guarantees each interruption is resumed at
 most once; if the resumed run hits the limit again, the next reset picks it
 up again, so long tasks crawl forward window after window while you sleep.
+
+## Tray icon + settings panel
+
+```
+pip install pystray pillow     # tray icon dependencies (panel itself is stdlib)
+nightshift tray
+```
+
+A color-coded badge with your 5h utilization sits in the system tray
+(green < 50% < yellow < 70% < orange < 90% < red), refreshing every
+minute. Left-click opens a local web panel (`127.0.0.1:8377`, configurable
+via `gui.port`) where everything is one click:
+
+- both quota windows with live reset countdowns
+- set / remove the daily warmup time, or learn it from your history
+- type bedtime prompts straight into the queue
+- start / stop the watch autopilot
+- "start with Windows" toggle (creates a Startup shortcut)
+
+Without pystray/pillow the panel still works — `nightshift tray` simply
+opens it in your browser.
 
 ## How it reads your quota
 

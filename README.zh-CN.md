@@ -52,6 +52,7 @@ python -m nightshift status
 | `nightshift schedule --warmup 07:00` | 注册每日 Windows 计划任务（可从睡眠唤醒电脑） |
 | `nightshift schedule --auto` | 从历史记录学习预热时间并注册 |
 | `nightshift unschedule` | 移除所有 nightshift 计划任务 |
+| `nightshift tray` | 任务栏托盘图标 + 网页设置面板 |
 | `nightshift config` | 查看配置文件路径和当前配置 |
 
 ## 三大工作流
@@ -101,6 +102,32 @@ nightshift watch
 
 睡前直接开 `nightshift watch` = 三个功能合体：白天被打断的活儿夜里自动
 续上 + 排队任务自动跑。
+
+## 托盘图标 + 设置面板（推荐日常入口）
+
+```
+pip install pystray pillow     # 托盘图标依赖（面板本身纯标准库）
+nightshift tray
+```
+
+任务栏右下角出现一个**额度徽章**：数字就是 5h 窗口用量百分比，颜色随
+用量变化（绿 <50% <黄 <70% <橙 <90% <红），每分钟自动刷新，鼠标悬停
+显示两个窗口的详情。左键点击在浏览器打开本地面板
+（`127.0.0.1:8377`，仅本机可访问，端口在配置 `gui.port` 改），所有
+功能一键完成：
+
+- 双窗口额度条 + 重置倒计时实时显示
+- 设置/移除每日预热时间，或一键"学习我的作息"自动填入
+- 睡前任务直接打字进队列（多行提示词+选目录）
+- 一键启动/停止 watch 自动驾驶
+- "开机自启托盘"开关（写入启动文件夹快捷方式）
+
+托盘右键菜单还有"立即预热"和"退出"。没装 pystray/pillow 也能用——
+`nightshift tray` 会直接打开浏览器面板，只是没有托盘图标。
+
+> 这台机器如果裸 `python` 不可用，启动命令是：
+> `C:\Users\<你>\AppData\Local\Programs\Python\Python312\python.exe -m nightshift tray`
+> （开机自启快捷方式内部已固化完整路径，勾上开关后无需手动操作。）
 
 ## 额度数据从哪来
 

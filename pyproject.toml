@@ -12,6 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "dujunyi416" }]
 keywords = ["claude", "claude-code", "rate-limit", "automation", "quota"]
 
+[project.optional-dependencies]
+tray = ["pystray>=0.19", "pillow>=10"]
+
 [project.urls]
 Homepage = "https://github.com/dujunyi416/claude-nightshift"
 

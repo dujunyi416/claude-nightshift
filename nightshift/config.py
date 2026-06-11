@@ -55,6 +55,10 @@ DEFAULTS: dict[str, Any] = {
         # (undocumented) endpoint. claude-code-statusline uses 300s.
         "cache_ttl_sec": 60,
     },
+    "gui": {
+        # Local web panel port (127.0.0.1 only).
+        "port": 8377,
+    },
     "telegram": {
         # Optional: notify when overnight jobs finish. Leave empty to disable.
         # Can also be set via env vars NIGHTSHIFT_TG_TOKEN / NIGHTSHIFT_TG_CHAT.
