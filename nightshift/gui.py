@@ -596,13 +596,31 @@ def run_gui(open_browser: bool = True) -> None:
     if open_browser:
         webbrowser.open(url)
 
+    # watch（监听任务队列）默认开启
+    if app.watch_proc is None:
+        threading.Thread(target=app.toggle_watch, daemon=True).start()
+
     if HAS_TRAY:
+        def _watch_running() -> bool:
+            return (app.watch_proc is not None
+                    and app.watch_proc.poll() is None)
+
         menu = pystray.Menu(
             pystray.MenuItem("打开面板", lambda: webbrowser.open(url),
                              default=True),
             pystray.MenuItem("立即预热", lambda: threading.Thread(
                 target=app.warmup_now, daemon=True).start()),
-            pystray.MenuItem("创建桌面启动图标", lambda: install_launcher()),
+            pystray.MenuItem("刷新用量", lambda: threading.Thread(
+                target=lambda: app.refresh_usage(force=True),
+                daemon=True).start()),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("监听任务队列", lambda: app.toggle_watch(),
+                             checked=lambda item: _watch_running()),
+            pystray.MenuItem(
+                "开机自启",
+                lambda: app.set_autostart(not STARTUP_LNK.exists()),
+                checked=lambda item: STARTUP_LNK.exists()),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("退出", lambda: app.quit()),
         )
         app.icon = pystray.Icon("claude-nightshift", _make_icon_image(None),
