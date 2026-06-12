@@ -422,6 +422,32 @@ class App:
 
     # ----- background monitor -----
 
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """Check if process is alive WITHOUT sending any signal.
+        On Windows os.kill(pid,0) calls TerminateProcess — never use it for
+        existence checks. Use GetExitCodeProcess via ctypes instead."""
+        if sys.platform == "win32":
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            h = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not h:
+                return False
+            code = ctypes.c_ulong(0)
+            ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+            ctypes.windll.kernel32.CloseHandle(h)
+            return code.value == STILL_ACTIVE
+        # POSIX: signal 0 = existence check (raises OSError if gone)
+        try:
+            os.kill(pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+
     def _watch_running(self) -> bool:
         """True if a watch process is alive (checks in-memory Popen first,
         then the PID file written by runner.watch())."""
@@ -430,10 +456,7 @@ class App:
         from .runner import WATCH_PID_PATH
         try:
             pid = int(WATCH_PID_PATH.read_text(encoding="utf-8").strip())
-            os.kill(pid, 0)  # 0 = existence check; raises if gone
-            return True
-        except PermissionError:
-            return True   # process exists, we just can't signal it
+            return self._pid_alive(pid)
         except (OSError, ValueError):
             return False
 
