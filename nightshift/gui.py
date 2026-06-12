@@ -216,6 +216,8 @@ class App:
                  "session_short": j.session_id[:8] if j.session_id else ""}
                 for j in load_jobs()
             ],
+            "running": self._running_view(),
+            "runner_tail": self._runner_tail(),
             "watch": {"running": running,
                       "pid": self.watch_proc.pid if running else None},
             "autostart": STARTUP_LNK.exists(),
@@ -415,12 +417,36 @@ class App:
         ok = notify(text)
         return {"ok": ok, "message": "已推送到手机" if ok else "推送失败（未配置或网络）"}
 
+    # ----- background monitor -----
+
+    def _running_view(self) -> dict | None:
+        from .jobs import get_running
+
+        r = get_running()
+        if not r:
+            return None
+        return {
+            "prompt": (r.get("prompt") or "").replace("\n", " ")[:90],
+            "cwd_name": Path(r.get("cwd", "")).name,
+            "model": r.get("model", "默认"),
+            "elapsed_min": round((time.time() - r.get("started_at",
+                                                      time.time())) / 60),
+        }
+
+    def _runner_tail(self, lines: int = 14) -> str:
+        p = DATA_DIR / "logs" / "runner.log"
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return "\n".join(text.splitlines()[-lines:])
+
     # ----- history -----
 
     def history(self) -> list[dict]:
         import json as _json
 
-        from .jobs import DONE_DIR, FAILED_DIR
+        from .jobs import DONE_DIR, FAILED_DIR, LOGS_DIR
 
         items = []
         for d, status in ((DONE_DIR, "done"), (FAILED_DIR, "failed")):
@@ -437,20 +463,39 @@ class App:
                     "status": status,
                     "mtime": p.stat().st_mtime,
                 })
+        # Resume runs don't pass through the queue, so list their logs too -
+        # otherwise auto-resumed work is invisible in the panel.
+        if LOGS_DIR.exists():
+            for p in LOGS_DIR.glob("resume-*.log"):
+                try:
+                    head = p.read_text(encoding="utf-8", errors="replace")[:40]
+                except OSError:
+                    continue
+                ok = head.startswith("=== exit 0")
+                items.append({
+                    "id": p.stem,  # e.g. "resume-1a2b3c4d"
+                    "prompt": f"↻ 续跑 {p.stem.replace('resume-', '')}",
+                    "status": "done" if ok else "failed",
+                    "kind": "resume",
+                    "mtime": p.stat().st_mtime,
+                })
         items.sort(key=lambda x: x["mtime"], reverse=True)
         for it in items:
             it["when"] = time.strftime("%m-%d %H:%M", time.localtime(it.pop("mtime")))
-        return items[:10]
+        return items[:12]
 
     def job_log(self, job_id: str, status: str) -> dict:
-        from .jobs import DONE_DIR, FAILED_DIR
+        from .jobs import DONE_DIR, FAILED_DIR, LOGS_DIR
 
-        d = DONE_DIR if status == "done" else FAILED_DIR
         # job_id comes from our own directory listing, but never trust it
         # as a path component.
         if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
             return {"ok": False, "text": "bad id"}
-        p = d / f"{job_id}.log"
+        if job_id.startswith("resume-"):
+            p = LOGS_DIR / f"{job_id}.log"
+        else:
+            d = DONE_DIR if status == "done" else FAILED_DIR
+            p = d / f"{job_id}.log"
         if not p.exists():
             return {"ok": False, "text": "log not found"}
         return {"ok": True, "text": p.read_text(encoding="utf-8",

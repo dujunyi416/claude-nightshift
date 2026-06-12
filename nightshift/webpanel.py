@@ -136,6 +136,14 @@ PAGE = """<!doctype html>
   <button class="gray" onclick="act('/api/warmup_now')">立即预热窗口</button></div>
 </div>
 
+<div class="card span2"><h2>后台运行监控 — 队列在后台跑，这里看现在跑到哪</h2>
+  <div id="runbox" class="muted">加载中…</div>
+  <pre id="runtail" style="display:none"></pre>
+  <div class="muted">注：headless 运行下 Claude 的输出要整段跑完才回传，所以这里看到的是
+    运行器的进度日志（开始/完成/耗时/模型），不是 Claude 的实时逐字输出。
+    任务开始和完成也会推到 Telegram。</div>
+</div>
+
 <div class="card"><h2>白天保温 — 醒着的时段，窗口一空闲就自动激活</h2>
   <div class="row"><label><input type="checkbox" id="kwon"> 开启</label>
     从 <input type="text" id="kwstart" size="5" placeholder="07:00">
@@ -360,6 +368,17 @@ async function refresh() {
      <button class="gray small" onclick="editJob('${j.id}')">改</button>
      <button class="red small" onclick="post('/api/queue/remove',{id:'${j.id}'}).then(refresh)">删</button></li>`).join('')
     || '<li class="muted">队列为空</li>';
+  const rn = s.running;
+  if (rn) {
+    $('runbox').innerHTML = `🟢 <b>跑步中</b> · 已 ${rn.elapsed_min} 分钟 · `
+      + `模型 ${esc(rn.model)} · ${esc(rn.cwd_name)}<br>`
+      + `<span class="muted">${esc(rn.prompt)}</span>`;
+  } else {
+    $('runbox').textContent = '空闲 — 当前没有任务在跑';
+  }
+  if (s.runner_tail) {
+    $('runtail').style.display = 'block'; $('runtail').textContent = s.runner_tail;
+  } else { $('runtail').style.display = 'none'; }
   $('wbtn').textContent = s.watch.running ? '停止 watch' : '启动 watch';
   $('wstate').textContent = s.watch.running ? `运行中 (PID ${s.watch.pid})` : '未运行';
   $('wstate').className = s.watch.running ? 'ok' : 'muted';
@@ -463,7 +482,7 @@ function qDragEnd() {
   if (ids.length) post('/api/queue/reorder', {ids}).then(refresh);
 }
 refresh(); loadSessions();
-setInterval(refresh, 30000); setInterval(loadSessions, 120000);
+setInterval(refresh, 15000); setInterval(loadSessions, 120000);
 </script></body></html>
 """
 

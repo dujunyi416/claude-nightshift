@@ -175,7 +175,7 @@ def set_running(job: Job) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     RUNNING_PATH.write_text(json.dumps({
         "id": job.id, "prompt": job.prompt, "cwd": job.cwd,
-        "started_at": time.time(),
+        "model": job.model or "默认", "started_at": time.time(),
     }, ensure_ascii=False), encoding="utf-8")
 
 
@@ -196,7 +196,7 @@ def format_running() -> str:
         return "🟢 当前没有任务在跑。"
     mins = (time.time() - r.get("started_at", time.time())) / 60
     preview = (r.get("prompt") or "").replace("\n", " ")[:70]
-    return (f"🟢 跑步中 · 已 {mins:.0f} 分钟\n"
+    return (f"🟢 跑步中 · 已 {mins:.0f} 分钟 · 模型 {r.get('model', '默认')}\n"
             f"{preview}\n目录: {short_dir(r.get('cwd', ''))}")
 
 
