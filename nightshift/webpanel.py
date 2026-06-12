@@ -41,6 +41,8 @@ PAGE = """<!doctype html>
        display:flex; align-items:baseline; gap:12px; }
   h1 small { color:var(--text3); font-weight:400; font-size:12px;
              letter-spacing:0; }
+  .tagline { color:var(--text2); font-size:14px; margin:-14px 0 22px;
+             letter-spacing:.01em; }
   .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
           gap:16px; align-items:start; grid-auto-flow:row dense; }
   .span2 { grid-column:1 / -1; }
@@ -121,6 +123,7 @@ PAGE = """<!doctype html>
 </style></head><body>
 <div class="wrap">
 <h1>🌙 Sleep Well <small id="src"></small></h1>
+<div class="tagline">把没做完的事交出去，安心睡 — 睡前布置任务，就像吞下一粒褪黑素。</div>
 <div class="grid">
 
 <div class="card span2"><h2>额度</h2>

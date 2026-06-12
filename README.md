@@ -1,9 +1,17 @@
 # Sleep Well 🌙
 
+*Queue it, let it go, sleep well.*
+
 **Quota-aware automation for Claude Code subscriptions.** Check your rate
 limits, pre-warm the 5-hour window before you wake up, queue prompts before
 bed, and auto-resume any task the limit cut off — the moment your quota
 resets.
+
+> **Sleep Well** is named after the melatonin you take before bed — and it does
+> the same thing for your head. The reason you can't sleep is the unfinished
+> task still running laps in your mind. Hand it to the queue and that loop
+> closes: your brain lets go, Sleep Well runs the job in the quota window you'd
+> have slept through, and you wake up to it already done.
 
 > The CLI command, Python package and data folder are still named `nightshift`
 > (so existing setups keep working); "Sleep Well" is the display name.
