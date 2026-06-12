@@ -213,7 +213,8 @@ class App:
                 {"id": j.id, "prompt": j.prompt.replace("\n", " ")[:80],
                  "cwd_name": Path(j.cwd).name,
                  "paused": j.paused,
-                 "session_short": j.session_id[:8] if j.session_id else ""}
+                 "session_short": j.session_id[:8] if j.session_id else "",
+                 "add_dirs": j.add_dirs or []}
                 for j in load_jobs()
             ],
             "running": self._running_view(),
@@ -434,12 +435,23 @@ class App:
         }
 
     def _runner_tail(self, lines: int = 14) -> str:
+        from .runner import STREAM_TAIL_PATH
+
+        parts = []
         p = DATA_DIR / "logs" / "runner.log"
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
+            parts.append("\n".join(text.splitlines()[-lines:]))
         except OSError:
-            return ""
-        return "\n".join(text.splitlines()[-lines:])
+            pass
+        try:
+            stream = STREAM_TAIL_PATH.read_text(encoding="utf-8",
+                                                errors="replace").strip()
+            if stream:
+                parts.append("── Claude 实时进度 ──\n" + stream)
+        except OSError:
+            pass
+        return "\n".join(parts)
 
     # ----- history -----
 
@@ -506,7 +518,7 @@ class App:
     # ----- queue -----
 
     def add_job(self, prompt: str, cwd: str, session_id: str = "",
-                create_dir: bool = False) -> dict:
+                create_dir: bool = False, add_dirs: list | None = None) -> dict:
         prompt = prompt.strip()
         if not prompt:
             return {"ok": False, "message": "提示词为空"}
@@ -520,7 +532,8 @@ class App:
             else:
                 return {"ok": False,
                         "message": f"目录不存在: {cwd}（勾选'自动创建'可新建项目）"}
-        job = new_job(prompt, cwd=cwd, session_id=session_id)
+        job = new_job(prompt, cwd=cwd, session_id=session_id,
+                      add_dirs=add_dirs or [])
         return {"ok": True, "id": job.id}
 
     def remove_job(self, job_id: str) -> dict:
@@ -533,9 +546,10 @@ class App:
         if j is None:
             return {"ok": False, "message": "找不到该任务"}
         return {"ok": True, "id": j.id, "prompt": j.prompt, "cwd": j.cwd,
-                "session_id": j.session_id}
+                "session_id": j.session_id, "add_dirs": j.add_dirs or []}
 
-    def update_job(self, job_id: str, prompt: str, cwd: str) -> dict:
+    def update_job(self, job_id: str, prompt: str, cwd: str,
+                   add_dirs: list | None = None) -> dict:
         from .jobs import update_job as jobs_update
 
         prompt = (prompt or "").strip()
@@ -544,7 +558,7 @@ class App:
         cwd = (cwd or "").strip() or str(Path.home())
         if not Path(cwd).is_dir():
             return {"ok": False, "message": f"目录不存在: {cwd}"}
-        ok = jobs_update(job_id, prompt=prompt, cwd=cwd)
+        ok = jobs_update(job_id, prompt=prompt, cwd=cwd, add_dirs=add_dirs)
         return {"ok": ok, "message": "已保存修改" if ok else "找不到该任务"}
 
     def reorder_jobs(self, ids: list) -> dict:

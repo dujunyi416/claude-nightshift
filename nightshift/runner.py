@@ -9,7 +9,10 @@ Typical flow:
 
 from __future__ import annotations
 
+import json
 import subprocess
+import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,10 +24,67 @@ from .notify import notify
 from .quota import UsageSnapshot, fetch_usage
 
 RUNNER_LOG = DATA_DIR / "logs" / "runner.log"
+STREAM_TAIL_PATH = DATA_DIR / "logs" / "stream_tail.txt"
+_STREAM_KEEP = 20  # lines to keep in the rolling tail
 
 # Substrings that indicate claude aborted due to the rate limit, in which
 # case the job should be re-queued instead of marked failed.
 LIMIT_MARKERS = ("usage limit", "rate limit", "limit reached", "limit will reset")
+
+
+def _fmt_tool(name: str, inp: dict) -> str:
+    if name == "Read":
+        return f"📖 读 {Path(inp.get('file_path', '?')).name}"
+    if name in ("Write", "Edit"):
+        return f"✏️ {name} {Path(inp.get('file_path', '?')).name}"
+    if name == "Bash":
+        return f"⚙️ {(inp.get('command') or '')[:60]}"
+    if name in ("Glob", "Grep"):
+        return f"🔍 {name} {(inp.get('pattern') or inp.get('query') or '')[:40]}"
+    return f"🔧 {name}"
+
+
+def _fmt_event(ev: dict) -> str | None:
+    """Return a one-line human summary for a stream-json event, or None."""
+    stamp = datetime.now().astimezone().strftime("%H:%M:%S")
+    t = ev.get("type")
+    if t == "system" and ev.get("subtype") == "init":
+        return f"[{stamp}] 🚀 初始化 ({ev.get('model', '')})"
+    if t == "assistant":
+        parts = []
+        for block in (ev.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                txt = (block.get("text") or "").strip()
+                if txt:
+                    parts.append(f"💬 {txt[:120]}")
+            elif block.get("type") == "tool_use":
+                parts.append(_fmt_tool(block.get("name", ""), block.get("input") or {}))
+        return f"[{stamp}] " + "; ".join(parts[:3]) if parts else None
+    if t == "result":
+        sub = ev.get("subtype", "")
+        suffix = (": " + (ev.get("result") or "").strip()[:60]) if ev.get("result") else ""
+        return f"[{stamp}] {'✅ 完成' if sub == 'success' else '❌ 结束 (' + sub + ')'}{suffix}"
+    return None
+
+
+def _append_stream_tail(line: str) -> None:
+    try:
+        ev = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return
+    summary = _fmt_event(ev)
+    if not summary:
+        return
+    STREAM_TAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = STREAM_TAIL_PATH.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        existing = []
+    existing.append(summary)
+    STREAM_TAIL_PATH.write_text(
+        "\n".join(existing[-_STREAM_KEEP:]) + "\n", encoding="utf-8")
 
 
 def _log(msg: str) -> None:
@@ -84,7 +144,7 @@ def _wait_for_reset(poll_sec: float) -> None:
 
 def _build_cmd(job: Job, cfg: dict) -> list[str]:
     claude = find_claude_cmd(cfg)
-    cmd = [claude, "-p"]
+    cmd = [claude, "-p", "--output-format", "stream-json"]
     if job.session_id:
         cmd += ["--resume", job.session_id]
     cmd.append(job.prompt)
@@ -93,6 +153,8 @@ def _build_cmd(job: Job, cfg: dict) -> list[str]:
     mode = job.permission_mode or cfg["runner"]["permission_mode"]
     if mode:
         cmd += ["--permission-mode", mode]
+    for d in (job.add_dirs or []):
+        cmd += ["--add-dir", d]
     return cmd
 
 
@@ -103,31 +165,60 @@ def _execute(job: Job, cfg: dict) -> tuple[bool, bool, str]:
     _log(f"job {job.id}: starting in {job.cwd}")
     _log(f"job {job.id}: prompt: {job.prompt[:120]}")
     start = time.time()
+    STREAM_TAIL_PATH.unlink(missing_ok=True)
+
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        result = subprocess.run(
-            cmd, cwd=job.cwd, capture_output=True, text=True,
-            timeout=timeout, encoding="utf-8", errors="replace",
+        proc = subprocess.Popen(
+            cmd, cwd=job.cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=flags,
         )
-    except subprocess.TimeoutExpired:
-        return False, False, f"TIMEOUT after {timeout / 60:.0f} minutes"
     except OSError as e:
         return False, False, f"LAUNCH ERROR: {e}"
 
+    stderr_buf: list[str] = []
+
+    def _drain_stderr() -> None:
+        for ln in proc.stderr:
+            stderr_buf.append(ln)
+
+    threading.Thread(target=_drain_stderr, daemon=True).start()
+
+    stdout_buf: list[str] = []
+    timed_out = False
+    try:
+        for raw in proc.stdout:
+            stdout_buf.append(raw)
+            _append_stream_tail(raw.rstrip())
+            if time.time() - start > timeout:
+                proc.kill()
+                timed_out = True
+                break
+        proc.stdout.close()
+    except OSError:
+        pass
+
+    if timed_out:
+        return False, False, f"TIMEOUT after {timeout / 60:.0f} minutes"
+
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+    stdout_text = "".join(stdout_buf)
+    stderr_text = "".join(stderr_buf)
     elapsed = (time.time() - start) / 60
     output = (
-        f"=== exit {result.returncode} after {elapsed:.1f} min ===\n"
-        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        f"=== exit {proc.returncode} after {elapsed:.1f} min ===\n"
+        f"--- stdout (stream-json) ---\n{stdout_text}\n--- stderr ---\n{stderr_text}"
     )
-    blob = (result.stdout + result.stderr).lower()
-    # A failed run mentioning the limit, or a suspiciously short "reply"
-    # that is just the limit banner, means we were rate-limited - not a
-    # real job failure. (A long successful output may legitimately contain
-    # the words "rate limit", so only short outputs count there.)
+    blob = (stdout_text + stderr_text).lower()
     mentions_limit = any(m in blob for m in LIMIT_MARKERS)
-    hit_limit = mentions_limit and (
-        result.returncode != 0 or len(result.stdout) < 500
-    )
-    return result.returncode == 0 and not hit_limit, hit_limit, output
+    hit_limit = mentions_limit and proc.returncode != 0
+    return proc.returncode == 0 and not hit_limit, hit_limit, output
 
 
 def _merge_prompt(jobs: list[Job]) -> str:

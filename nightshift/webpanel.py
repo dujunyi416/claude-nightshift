@@ -151,8 +151,7 @@ PAGE = """<!doctype html>
 <div class="card span2"><h2>后台运行监控 — 队列在后台跑，这里看现在跑到哪</h2>
   <div id="runbox" class="muted">加载中…</div>
   <pre id="runtail" style="display:none"></pre>
-  <div class="muted">注：headless 运行下 Claude 的输出要整段跑完才回传，所以这里看到的是
-    运行器的进度日志（开始/完成/耗时/模型），不是 Claude 的实时逐字输出。
+  <div class="muted">运行器进度 + Claude 实时步骤（--output-format stream-json）。
     任务开始和完成也会推到 Telegram。</div>
 </div>
 
@@ -181,6 +180,9 @@ PAGE = """<!doctype html>
   <textarea id="prompt" placeholder="把任务描述写在这里。选中上面的会话 = 续写该会话；不选 = 在下面目录里开新任务"></textarea>
   <div class="row">目录 <input type="text" id="cwd" size="34">
     <label><input type="checkbox" id="mkdir"> 不存在则创建（新项目）</label></div>
+  <div class="row">附加目录 <input type="text" id="adddirs" size="52"
+    placeholder="可选 — 逗号分隔，允许 Claude 跨目录读写（--add-dir）">
+  </div>
   <div class="row"><button id="addbtn" onclick="addJob()">加入队列</button>
     <button class="gray small" id="canceledit" style="display:none"
       onclick="cancelEdit()">取消编辑</button>
@@ -374,7 +376,7 @@ async function refresh() {
       ondragleave="qDragLeave(event)" ondrop="qDrop(event)" ondragend="qDragEnd(event)">
      <span class="drag" title="拖动排序">⠿</span>
      <div class="grow"><div class="t" title="${esc(j.prompt)}">${esc(j.prompt)}</div>
-     <div class="muted t">${i===0&&!j.paused?'▶ 下一个 · ':''}${j.session_short ? '↻ 续写 '+j.session_short : '新会话'} · ${esc(j.cwd_name)}${j.paused?' · ⏸ 已暂停':''}</div></div>
+     <div class="muted t">${i===0&&!j.paused?'▶ 下一个 · ':''}${j.session_short ? '↻ 续写 '+j.session_short : '新会话'} · ${esc(j.cwd_name)}${j.add_dirs&&j.add_dirs.length?' +'+j.add_dirs.map(d=>d.split(/[\\/]/).pop()).join(','):''}${j.paused?' · ⏸ 已暂停':''}</div></div>
      <button class="gray small" title="置顶" onclick="post('/api/queue/pin',{id:'${j.id}'}).then(refresh)">↑</button>
      <button class="gray small" title="${j.paused?'启用':'暂停'}" onclick="post('/api/queue/pause',{id:'${j.id}',paused:${!j.paused}}).then(refresh)">${j.paused?'▶':'⏸'}</button>
      <button class="gray small" onclick="editJob('${j.id}')">改</button>
@@ -469,6 +471,7 @@ async function editJob(id) {
   clearTarget();
   $('prompt').value = r.prompt;
   $('cwd').value = r.cwd;
+  $('adddirs').value = (r.add_dirs || []).join(', ');
   $('addbtn').textContent = '保存修改';
   $('edithint').style.display = 'inline';
   $('canceledit').style.display = 'inline';
@@ -477,17 +480,22 @@ async function editJob(id) {
 function cancelEdit() {
   EDITING = null;
   $('prompt').value = '';
+  $('adddirs').value = '';
   $('addbtn').textContent = '加入队列';
   $('edithint').style.display = 'none';
   $('canceledit').style.display = 'none';
   $('addmsg').textContent = '';
 }
+function _parseDirs() {
+  return $('adddirs').value.trim().split(',').map(s => s.trim()).filter(Boolean);
+}
 async function addJob() {
   const p = $('prompt').value.trim();
   if (!p) return;
+  const add_dirs = _parseDirs();
   if (EDITING) {
     const r = await post('/api/job/update',
-      {id: EDITING, prompt: p, cwd: $('cwd').value.trim()});
+      {id: EDITING, prompt: p, cwd: $('cwd').value.trim(), add_dirs});
     $('addmsg').textContent = r.message || (r.ok ? '已保存' : '失败');
     if (r.ok) { cancelEdit(); refresh(); }
     return;
@@ -496,9 +504,10 @@ async function addJob() {
     prompt: p, cwd: $('cwd').value.trim(),
     session_id: TARGET ? TARGET.session_id : '',
     create_dir: $('mkdir').checked,
+    add_dirs,
   });
   $('addmsg').textContent = r.ok ? '已加入' : (r.message || '失败');
-  if (r.ok) { $('prompt').value = ''; clearTarget(); refresh(); }
+  if (r.ok) { $('prompt').value = ''; $('adddirs').value = ''; clearTarget(); refresh(); }
 }
 let DRAG_ID = null;
 function qDragStart(e) {
@@ -586,13 +595,14 @@ class PanelHandler(BaseHTTPRequestHandler):
             "/api/queue/add": lambda: self.app.add_job(
                 body.get("prompt", ""), body.get("cwd", ""),
                 session_id=body.get("session_id", ""),
-                create_dir=bool(body.get("create_dir"))),
+                create_dir=bool(body.get("create_dir")),
+                add_dirs=body.get("add_dirs", [])),
             "/api/queue/remove": lambda: self.app.remove_job(
                 body.get("id", "")),
             "/api/job/get": lambda: self.app.get_job(body.get("id", "")),
             "/api/job/update": lambda: self.app.update_job(
                 body.get("id", ""), body.get("prompt", ""),
-                body.get("cwd", "")),
+                body.get("cwd", ""), body.get("add_dirs", [])),
             "/api/queue/reorder": lambda: self.app.reorder_jobs(
                 body.get("ids", [])),
             "/api/queue/pin": lambda: self.app.pin_job(body.get("id", "")),

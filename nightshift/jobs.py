@@ -50,6 +50,8 @@ class Job:
     order: float | None = None
     # Temporarily skipped by the runner without being deleted.
     paused: bool = False
+    # Extra directories claude is allowed to read/write (--add-dir flags).
+    add_dirs: list = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.order is None:
@@ -62,7 +64,7 @@ class Job:
 
 def new_job(prompt: str, cwd: str, model: str = "", permission_mode: str = "",
             priority: int = 5, timeout_min: int = 0,
-            session_id: str = "") -> Job:
+            session_id: str = "", add_dirs: list | None = None) -> Job:
     job = Job(
         id=time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
         prompt=prompt,
@@ -72,6 +74,7 @@ def new_job(prompt: str, cwd: str, model: str = "", permission_mode: str = "",
         priority=priority,
         timeout_min=timeout_min,
         session_id=session_id,
+        add_dirs=[d.strip() for d in (add_dirs or []) if d and d.strip()],
     )
     _write_job(job)
     return job
@@ -108,7 +111,8 @@ def get_job(job_id: str) -> Job | None:
 
 
 def update_job(job_id: str, prompt: str | None = None,
-               cwd: str | None = None) -> bool:
+               cwd: str | None = None,
+               add_dirs: list | None = None) -> bool:
     """Edit a queued job in place, preserving its id and queue position."""
     job = get_job(job_id)
     if job is None:
@@ -117,6 +121,8 @@ def update_job(job_id: str, prompt: str | None = None,
         job.prompt = prompt
     if cwd is not None:
         job.cwd = str(Path(cwd).resolve())
+    if add_dirs is not None:
+        job.add_dirs = [d.strip() for d in add_dirs if d and d.strip()]
     _write_job(job)
     return True
 
