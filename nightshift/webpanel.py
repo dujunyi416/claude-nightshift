@@ -58,6 +58,11 @@ PAGE = """<!doctype html>
   #target { background:#1a2433; border:1px solid #2b5ea7; border-radius:6px;
             padding:6px 10px; font-size:12px; margin-bottom:6px;
             display:flex; justify-content:space-between; align-items:center; }
+  li.qitem.paused { opacity:.5; }
+  li.qitem.dragover { border-color:#2b5ea7; background:#1a2433; }
+  .drag { cursor:grab; color:#6b7280; padding:0 4px; user-select:none;
+          font-size:14px; }
+  #edithint { display:none; color:#e0a020; }
 </style></head><body>
 <h1>🌙 Claude Nightshift <small id="src"></small></h1>
 
@@ -96,8 +101,12 @@ PAGE = """<!doctype html>
   <textarea id="prompt" placeholder="把任务描述写在这里。选中上面的会话 = 续写该会话；不选 = 在下面目录里开新任务"></textarea>
   <div class="row">目录 <input type="text" id="cwd" size="34">
     <label><input type="checkbox" id="mkdir"> 不存在则创建（新项目）</label></div>
-  <div class="row"><button onclick="addJob()">加入队列</button>
+  <div class="row"><button id="addbtn" onclick="addJob()">加入队列</button>
+    <button class="gray small" id="canceledit" style="display:none"
+      onclick="cancelEdit()">取消编辑</button>
+    <span class="muted" id="edithint">编辑中…保存后覆盖原任务</span>
     <span class="muted" id="addmsg"></span></div>
+  <div class="muted">拖动 ⠿ 调整顺序；↑ 置顶、⏸ 暂停（跳过但不删）、改 = 载入编辑。</div>
   <ul id="queue"></ul>
 </div>
 
@@ -273,9 +282,16 @@ async function refresh() {
   }
   if (!$('wtime').matches(':focus')) $('wtime').value = s.warmup_time;
   $('wstatus').textContent = s.schedule;
-  $('queue').innerHTML = s.queue.map(j =>
-    `<li><div class="grow"><div class="t" title="${esc(j.prompt)}">${esc(j.prompt)}</div>
-     <div class="muted t">${j.session_short ? '↻ 续写 '+j.session_short : '新会话'} · ${esc(j.cwd_name)}</div></div>
+  $('queue').innerHTML = s.queue.map((j, i) =>
+    `<li class="qitem${j.paused?' paused':''}" data-id="${j.id}" draggable="true"
+      ondragstart="qDragStart(event)" ondragover="qDragOver(event)"
+      ondragleave="qDragLeave(event)" ondrop="qDrop(event)" ondragend="qDragEnd(event)">
+     <span class="drag" title="拖动排序">⠿</span>
+     <div class="grow"><div class="t" title="${esc(j.prompt)}">${esc(j.prompt)}</div>
+     <div class="muted t">${i===0&&!j.paused?'▶ 下一个 · ':''}${j.session_short ? '↻ 续写 '+j.session_short : '新会话'} · ${esc(j.cwd_name)}${j.paused?' · ⏸ 已暂停':''}</div></div>
+     <button class="gray small" title="置顶" onclick="post('/api/queue/pin',{id:'${j.id}'}).then(refresh)">↑</button>
+     <button class="gray small" title="${j.paused?'启用':'暂停'}" onclick="post('/api/queue/pause',{id:'${j.id}',paused:${!j.paused}}).then(refresh)">${j.paused?'▶':'⏸'}</button>
+     <button class="gray small" onclick="editJob('${j.id}')">改</button>
      <button class="red small" onclick="post('/api/queue/remove',{id:'${j.id}'}).then(refresh)">删</button></li>`).join('')
     || '<li class="muted">队列为空</li>';
   $('wbtn').textContent = s.watch.running ? '停止 watch' : '启动 watch';
@@ -310,9 +326,37 @@ async function suggest() {
   $('wstatus').textContent = r.message;
   if (r.time) $('wtime').value = r.time;
 }
+let EDITING = null;
+async function editJob(id) {
+  const r = await post('/api/job/get', {id});
+  if (!r.ok) { alert(r.message || '找不到该任务'); return; }
+  EDITING = id;
+  clearTarget();
+  $('prompt').value = r.prompt;
+  $('cwd').value = r.cwd;
+  $('addbtn').textContent = '保存修改';
+  $('edithint').style.display = 'inline';
+  $('canceledit').style.display = 'inline';
+  $('prompt').focus();
+}
+function cancelEdit() {
+  EDITING = null;
+  $('prompt').value = '';
+  $('addbtn').textContent = '加入队列';
+  $('edithint').style.display = 'none';
+  $('canceledit').style.display = 'none';
+  $('addmsg').textContent = '';
+}
 async function addJob() {
   const p = $('prompt').value.trim();
   if (!p) return;
+  if (EDITING) {
+    const r = await post('/api/job/update',
+      {id: EDITING, prompt: p, cwd: $('cwd').value.trim()});
+    $('addmsg').textContent = r.message || (r.ok ? '已保存' : '失败');
+    if (r.ok) { cancelEdit(); refresh(); }
+    return;
+  }
   const r = await post('/api/queue/add', {
     prompt: p, cwd: $('cwd').value.trim(),
     session_id: TARGET ? TARGET.session_id : '',
@@ -320,6 +364,32 @@ async function addJob() {
   });
   $('addmsg').textContent = r.ok ? '已加入' : (r.message || '失败');
   if (r.ok) { $('prompt').value = ''; clearTarget(); refresh(); }
+}
+let DRAG_ID = null;
+function qDragStart(e) {
+  DRAG_ID = e.currentTarget.dataset.id;
+  e.dataTransfer.effectAllowed = 'move';
+}
+function qDragOver(e) {
+  e.preventDefault();
+  const li = e.currentTarget;
+  if (li.dataset.id !== DRAG_ID) li.classList.add('dragover');
+}
+function qDragLeave(e) { e.currentTarget.classList.remove('dragover'); }
+function qDrop(e) {
+  e.preventDefault();
+  const li = e.currentTarget;
+  li.classList.remove('dragover');
+  const ul = li.parentNode;
+  const dragging = ul.querySelector(`[data-id="${DRAG_ID}"]`);
+  if (!dragging || dragging === li) return;
+  const rect = li.getBoundingClientRect();
+  const after = (e.clientY - rect.top) > rect.height / 2;
+  ul.insertBefore(dragging, after ? li.nextSibling : li);
+}
+function qDragEnd() {
+  const ids = [...$('queue').querySelectorAll('[data-id]')].map(x => x.dataset.id);
+  if (ids.length) post('/api/queue/reorder', {ids}).then(refresh);
 }
 refresh(); loadSessions();
 setInterval(refresh, 30000); setInterval(loadSessions, 120000);
@@ -384,6 +454,15 @@ class PanelHandler(BaseHTTPRequestHandler):
                 create_dir=bool(body.get("create_dir"))),
             "/api/queue/remove": lambda: self.app.remove_job(
                 body.get("id", "")),
+            "/api/job/get": lambda: self.app.get_job(body.get("id", "")),
+            "/api/job/update": lambda: self.app.update_job(
+                body.get("id", ""), body.get("prompt", ""),
+                body.get("cwd", "")),
+            "/api/queue/reorder": lambda: self.app.reorder_jobs(
+                body.get("ids", [])),
+            "/api/queue/pin": lambda: self.app.pin_job(body.get("id", "")),
+            "/api/queue/pause": lambda: self.app.pause_job(
+                body.get("id", ""), bool(body.get("paused"))),
             "/api/watch/toggle": self.app.toggle_watch,
             "/api/resume_now": lambda: self.app.resume_now(
                 body.get("session_id", ""), body.get("prompt", "")),

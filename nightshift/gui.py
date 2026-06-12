@@ -179,6 +179,7 @@ class App:
             "queue": [
                 {"id": j.id, "prompt": j.prompt.replace("\n", " ")[:80],
                  "cwd_name": Path(j.cwd).name,
+                 "paused": j.paused,
                  "session_short": j.session_id[:8] if j.session_id else ""}
                 for j in load_jobs()
             ],
@@ -444,6 +445,42 @@ class App:
 
     def remove_job(self, job_id: str) -> dict:
         return {"ok": jobs_remove(job_id)}
+
+    def get_job(self, job_id: str) -> dict:
+        from .jobs import get_job as jobs_get
+
+        j = jobs_get(job_id)
+        if j is None:
+            return {"ok": False, "message": "找不到该任务"}
+        return {"ok": True, "id": j.id, "prompt": j.prompt, "cwd": j.cwd,
+                "session_id": j.session_id}
+
+    def update_job(self, job_id: str, prompt: str, cwd: str) -> dict:
+        from .jobs import update_job as jobs_update
+
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return {"ok": False, "message": "提示词为空"}
+        cwd = (cwd or "").strip() or str(Path.home())
+        if not Path(cwd).is_dir():
+            return {"ok": False, "message": f"目录不存在: {cwd}"}
+        ok = jobs_update(job_id, prompt=prompt, cwd=cwd)
+        return {"ok": ok, "message": "已保存修改" if ok else "找不到该任务"}
+
+    def reorder_jobs(self, ids: list) -> dict:
+        from .jobs import reorder_jobs as jobs_reorder
+
+        return {"ok": True, "n": jobs_reorder([str(i) for i in ids])}
+
+    def pin_job(self, job_id: str) -> dict:
+        from .jobs import pin_job as jobs_pin
+
+        return {"ok": jobs_pin(job_id)}
+
+    def pause_job(self, job_id: str, paused: bool) -> dict:
+        from .jobs import set_paused
+
+        return {"ok": set_paused(job_id, paused)}
 
     # ----- watch -----
 

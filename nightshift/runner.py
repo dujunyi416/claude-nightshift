@@ -12,9 +12,11 @@ from __future__ import annotations
 import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .config import DATA_DIR, find_claude_cmd, load_config
-from .jobs import Job, archive_job, load_jobs
+from .jobs import (Job, archive_job, clear_running, load_jobs, set_running,
+                   short_dir)
 from .notify import notify
 from .quota import UsageSnapshot, fetch_usage
 
@@ -128,6 +130,29 @@ def _execute(job: Job, cfg: dict) -> tuple[bool, bool, str]:
     return result.returncode == 0 and not hit_limit, hit_limit, output
 
 
+def _merge_prompt(jobs: list[Job]) -> str:
+    """One combined prompt so a single `claude -p` loads the project context
+    once and does several related tasks in order (saves quota + time)."""
+    body = "\n".join(f"{i}) {j.prompt}" for i, j in enumerate(jobs, 1))
+    return (f"你有 {len(jobs)} 个任务，依次完成，每条做完用一句话报告结果：\n"
+            f"{body}")
+
+
+def _next_batch(jobs: list[Job], merge: bool) -> list[Job]:
+    """The job(s) to run next. Paused jobs are skipped. When merge is on and
+    the head job starts a fresh session, all pending same-cwd fresh-session
+    jobs are batched into one run. Session-bound (resume) jobs never merge."""
+    runnable = [j for j in jobs if not j.paused]
+    if not runnable:
+        return []
+    head = runnable[0]
+    if not merge or head.session_id:
+        return [head]
+    head_cwd = Path(head.cwd).resolve()
+    return [j for j in runnable
+            if not j.session_id and Path(j.cwd).resolve() == head_cwd]
+
+
 def run_queue(when: str = "", once: bool = False) -> int:
     """Drain the queue. Returns number of successfully completed jobs."""
     cfg = load_config()
@@ -135,6 +160,7 @@ def run_queue(when: str = "", once: bool = False) -> int:
     when = when or rcfg["start_when"]
     stop_util = rcfg["stop_utilization"]
     poll_sec = rcfg["poll_interval_sec"]
+    merge = rcfg.get("merge_same_cwd", True)
 
     jobs = load_jobs()
     if not jobs:
@@ -144,30 +170,46 @@ def run_queue(when: str = "", once: bool = False) -> int:
 
     completed = 0
     while True:
-        jobs = load_jobs()
-        if not jobs:
-            break
+        batch = _next_batch(load_jobs(), merge)
+        if not batch:
+            break  # only paused jobs left (or empty)
 
         usage = _quota_or_none()
         if not _can_start(usage, stop_util, when):
             _wait_for_reset(poll_sec)
 
-        job = jobs[0]
-        success, hit_limit, output = _execute(job, cfg)
+        head = batch[0]
+        if len(batch) > 1:
+            run_job = Job(
+                id=head.id, prompt=_merge_prompt(batch), cwd=head.cwd,
+                model=head.model, permission_mode=head.permission_mode,
+                timeout_min=head.timeout_min)
+            label = f"{len(batch)} 个任务（合并）: {head.prompt[:50]}"
+        else:
+            run_job = head
+            label = head.prompt[:70]
+
+        set_running(run_job)
+        notify(f"🟢 开始: {label}（{short_dir(head.cwd)}）")
+        start = time.time()
+        success, hit_limit, output = _execute(run_job, cfg)
+        mins = (time.time() - start) / 60
+        clear_running()
 
         if hit_limit:
-            _log(f"job {job.id}: hit the rate limit - re-queueing.")
+            _log(f"job {head.id}: hit the rate limit - re-queueing.")
             _wait_for_reset(poll_sec)
-            continue  # same job retried next iteration
+            continue  # same job(s) retried next iteration
 
-        archive_job(job, success, output)
+        for job in batch:
+            archive_job(job, success, output)
         if success:
-            completed += 1
-            _log(f"job {job.id}: done.")
-            notify(f"[nightshift] job done: {job.prompt[:100]}")
+            completed += len(batch)
+            _log(f"job {head.id}: done ({len(batch)} task(s), {mins:.0f}m).")
+            notify(f"✅ 完成 · {mins:.0f}分钟: {label[:60]}")
         else:
-            _log(f"job {job.id}: FAILED (see failed/{job.id}.log)")
-            notify(f"[nightshift] job FAILED: {job.prompt[:100]}")
+            _log(f"job {head.id}: FAILED (see failed/{head.id}.log)")
+            notify(f"❌ 失败: {label[:60]}（看 failed/ 日志）")
 
         if once:
             break

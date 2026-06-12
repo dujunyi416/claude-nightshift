@@ -36,6 +36,11 @@ DEFAULTS: dict[str, Any] = {
         "permission_mode": "acceptEdits",
         # Seconds between quota checks while waiting for a reset.
         "poll_interval_sec": 300,
+        # Merge pending fresh-session jobs that share a cwd into a single
+        # `claude -p` run (loads the project context once -> saves quota and
+        # lets the model coordinate related tasks). Session-bound (resume)
+        # jobs are never merged.
+        "merge_same_cwd": True,
     },
     "resume": {
         # Auto-resume sessions that were cut off by the rate limit.
