@@ -5,3 +5,6 @@ build/
 dist/
 .venv/
 .pytest_cache/
+
+# Generated desktop/Start Menu launcher shortcuts
+*.lnk
