@@ -481,8 +481,10 @@ class App:
                 })
         items.sort(key=lambda x: x["mtime"], reverse=True)
         for it in items:
-            it["when"] = time.strftime("%m-%d %H:%M", time.localtime(it.pop("mtime")))
-        return items[:12]
+            t = it.pop("mtime")
+            it["when"] = time.strftime("%m-%d %H:%M", time.localtime(t))
+            it["date"] = time.strftime("%m-%d", time.localtime(t))
+        return items[:30]
 
     def job_log(self, job_id: str, status: str) -> dict:
         from .jobs import DONE_DIR, FAILED_DIR, LOGS_DIR

@@ -115,6 +115,18 @@ PAGE = """<!doctype html>
   .drag { cursor:grab; color:var(--text3); padding:0 4px; user-select:none;
           font-size:15px; }
   #edithint { display:none; color:#ffd60a; }
+  details.hgroup { margin:6px 0; }
+  details.hgroup summary { list-style:none; cursor:pointer; padding:5px 8px;
+    border-radius:9px; font-size:12px; color:var(--text2); user-select:none;
+    display:flex; align-items:center; gap:6px; transition:background .15s; }
+  details.hgroup summary::-webkit-details-marker { display:none; }
+  details.hgroup summary:hover { background:rgba(255,255,255,.06); }
+  details.hgroup summary .arrow { font-size:10px; transition:transform .2s;
+    display:inline-block; color:var(--text3); }
+  details.hgroup[open] summary .arrow { transform:rotate(90deg); }
+  details.hgroup summary .dlabel { font-weight:600; color:var(--text); }
+  details.hgroup summary .dcnt { color:var(--text3); }
+  details.hgroup ul { margin:2px 0 4px 14px; padding:0; }
   ::-webkit-scrollbar { width:10px; height:10px; }
   ::-webkit-scrollbar-thumb { background:rgba(255,255,255,.14);
     border-radius:99px; border:2px solid transparent; background-clip:padding-box; }
@@ -387,19 +399,52 @@ async function refresh() {
   if (!$('cwd').value) $('cwd').value = s.home;
   loadHistory();
 }
+function _histDateLabel(d) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const fmt = x => `${pad(x.getMonth()+1)}-${pad(x.getDate())}`;
+  const today = fmt(now);
+  const yd = new Date(now); yd.setDate(yd.getDate()-1);
+  const yesterday = fmt(yd);
+  if (d === today) return '今天';
+  if (d === yesterday) return '昨天';
+  return d;
+}
 async function loadHistory() {
   const h = await (await fetch('/api/history')).json();
-  $('history').innerHTML = h.map(it => `
-    <li><div class="grow"><div class="t" title="${esc(it.prompt)}">${esc(it.prompt)}</div>
-      <div class="muted">${it.when}</div></div>
-      <span class="badge ${it.status==='done'?'ok':'fail'}">${it.status==='done'?'完成':'失败'}</span>
-      <button class="gray small" onclick="showLog('${it.id}','${it.status}')">日志</button></li>`).join('')
-    || '<li class="muted">暂无</li>';
+  if (!h.length) { $('history').innerHTML = '<li class="muted">暂无</li>'; return; }
+  const groups = {};
+  const order = [];
+  for (const it of h) {
+    const d = it.date || it.when.slice(0,5);
+    if (!groups[d]) { groups[d] = []; order.push(d); }
+    groups[d].push(it);
+  }
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const todayStr = `${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  $('history').innerHTML = order.map(d => {
+    const isToday = d === todayStr;
+    const label = _histDateLabel(d);
+    const rows = groups[d].map(it => `
+      <li><div class="grow"><div class="t" title="${esc(it.prompt)}">${esc(it.prompt)}</div>
+        <div class="muted">${it.when.slice(6)}</div></div>
+        <span class="badge ${it.status==='done'?'ok':'fail'}">${it.status==='done'?'完成':'失败'}</span>
+        <button class="gray small" onclick="showLog('${it.id}','${it.status}','${d}')">日志</button></li>`
+    ).join('');
+    return `<details class="hgroup" ${isToday?'open':''} id="hg-${d}">
+      <summary><span class="arrow">▶</span>
+        <span class="dlabel">${label}</span>
+        <span class="dcnt">${groups[d].length} 条</span></summary>
+      <ul>${rows}</ul></details>`;
+  }).join('');
 }
-async function showLog(id, status) {
+async function showLog(id, status, date) {
   const r = await (await fetch(`/api/joblog?id=${id}&status=${status}`)).json();
+  if (date) { const g = document.getElementById('hg-'+date); if (g) g.open = true; }
   $('logview').style.display = 'block';
   $('logview').textContent = r.text;
+  $('logview').scrollIntoView({behavior:'smooth', block:'nearest'});
 }
 async function applyWarmup() {
   const r = await post('/api/warmup/apply', {time: $('wtime').value.trim()});
