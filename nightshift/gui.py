@@ -195,7 +195,7 @@ class App:
         cfg = load_config()
         kw = cfg.get("keepwarm", {})
         tg = cfg.get("telegram", {})
-        running = self.watch_proc is not None and self.watch_proc.poll() is None
+        running = self._watch_running()
         return {
             "usage": usage,
             "weekly": weekly,
@@ -220,7 +220,9 @@ class App:
             "running": self._running_view(),
             "runner_tail": self._runner_tail(),
             "watch": {"running": running,
-                      "pid": self.watch_proc.pid if running else None},
+                      "pid": (self.watch_proc.pid
+                              if self.watch_proc and self.watch_proc.poll() is None
+                              else None)},
             "autostart": STARTUP_LNK.exists(),
             "data_dir": str(DATA_DIR),
             "home": str(Path.home()),
@@ -420,13 +422,26 @@ class App:
 
     # ----- background monitor -----
 
+    def _watch_running(self) -> bool:
+        """True if a watch process is alive (checks in-memory Popen first,
+        then the PID file written by runner.watch())."""
+        if self.watch_proc is not None and self.watch_proc.poll() is None:
+            return True
+        from .runner import WATCH_PID_PATH
+        try:
+            pid = int(WATCH_PID_PATH.read_text(encoding="utf-8").strip())
+            os.kill(pid, 0)  # 0 = existence check; raises if gone
+            return True
+        except PermissionError:
+            return True   # process exists, we just can't signal it
+        except (OSError, ValueError):
+            return False
+
     def running_state(self) -> dict:
         """Lightweight endpoint for the 3-second monitor poll."""
-        watch_on = (self.watch_proc is not None
-                    and self.watch_proc.poll() is None)
         return {"running": self._running_view(),
                 "runner_tail": self._runner_tail(),
-                "watch_on": watch_on}
+                "watch_on": self._watch_running()}
 
     def _running_view(self) -> dict | None:
         from .jobs import get_running
@@ -588,10 +603,25 @@ class App:
 
     # ----- watch -----
 
-    def toggle_watch(self) -> dict:
-        if self.watch_proc is not None and self.watch_proc.poll() is None:
-            self.watch_proc.terminate()
+    def _kill_watch(self) -> None:
+        """Terminate both the tracked Popen and any orphan watch process."""
+        if self.watch_proc is not None:
+            try:
+                self.watch_proc.terminate()
+            except OSError:
+                pass
             self.watch_proc = None
+        from .runner import WATCH_PID_PATH
+        try:
+            pid = int(WATCH_PID_PATH.read_text(encoding="utf-8").strip())
+            os.kill(pid, 15)  # SIGTERM
+        except (OSError, ValueError):
+            pass
+        WATCH_PID_PATH.unlink(missing_ok=True)
+
+    def toggle_watch(self) -> dict:
+        if self._watch_running():
+            self._kill_watch()
             return {"ok": True, "running": False}
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         log = (DATA_DIR / "logs" / "watch_gui.log").open("a", encoding="utf-8")

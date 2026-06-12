@@ -10,6 +10,7 @@ Typical flow:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -25,6 +26,7 @@ from .quota import UsageSnapshot, fetch_usage
 
 RUNNER_LOG = DATA_DIR / "logs" / "runner.log"
 STREAM_TAIL_PATH = DATA_DIR / "logs" / "stream_tail.txt"
+WATCH_PID_PATH = DATA_DIR / "watch.pid"
 _STREAM_KEEP = 20  # lines to keep in the rolling tail
 
 # Substrings that indicate claude aborted due to the rate limit, in which
@@ -330,48 +332,55 @@ def watch(poll_sec: float = 0) -> None:
     stop_util = rcfg["stop_utilization"]
     resume_cfg = cfg["resume"]
     start_polling()  # two-way telegram control, no-op if unconfigured
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    WATCH_PID_PATH.write_text(str(os.getpid()), encoding="utf-8")
+
     last_keepwarm = 0.0
     cycle = 0
     _log(f"watch started (poll {poll_sec:.0f}s, lookback "
          f"{resume_cfg['lookback_hours']}h, idle gate {resume_cfg['idle_min']}m, "
          f"Ctrl+C to stop)")
 
-    while True:
-        cycle += 1
-        last_keepwarm = maybe_keepwarm(last_keepwarm)
-        sessions = (
-            pending_resumes(resume_cfg["lookback_hours"], None,
-                            resume_cfg.get("idle_min", 5),
-                            resume_cfg.get("detect_stalled", True))
-            if resume_cfg.get("enabled", True) else []
-        )
-        if not resume_cfg.get("auto_stalled", True):
-            sessions = [s for s in sessions if s.confidence == "high"]
-        jobs = load_jobs()
+    try:
+        while True:
+            cycle += 1
+            last_keepwarm = maybe_keepwarm(last_keepwarm)
+            sessions = (
+                pending_resumes(resume_cfg["lookback_hours"], None,
+                                resume_cfg.get("idle_min", 5),
+                                resume_cfg.get("detect_stalled", True))
+                if resume_cfg.get("enabled", True) else []
+            )
+            if not resume_cfg.get("auto_stalled", True):
+                sessions = [s for s in sessions if s.confidence == "high"]
+            jobs = load_jobs()
 
-        usage = _quota_or_none()
-        util = usage.five_hour.utilization if usage else None
-        # Heartbeat so the loop is never a silent black box.
-        _log(f"cycle {cycle}: 5h={util if util is not None else '?'}% "
-             f"interrupted={len(sessions)} queued={len(jobs)}")
-
-        if not sessions and not jobs:
-            time.sleep(poll_sec)
-            continue
-
-        if sessions:
-            _log(format_pending(sessions))
-        if usage and usage.five_hour.active and (util or 0) >= stop_util:
-            _log(f"5h at {util:.0f}% (>= {stop_util}); waiting for reset")
-            _wait_for_reset(poll_sec)
-
-        for s in sessions[: resume_cfg.get("max_sessions", 3)]:
-            resume_session(s, cfg)
             usage = _quota_or_none()
-            if usage and usage.five_hour.exhausted:
-                _log("window exhausted by resume; waiting for reset")
+            util = usage.five_hour.utilization if usage else None
+            # Heartbeat so the loop is never a silent black box.
+            _log(f"cycle {cycle}: 5h={util if util is not None else '?'}% "
+                 f"interrupted={len(sessions)} queued={len(jobs)}")
+
+            if not sessions and not jobs:
+                time.sleep(poll_sec)
+                continue
+
+            if sessions:
+                _log(format_pending(sessions))
+            if usage and usage.five_hour.active and (util or 0) >= stop_util:
+                _log(f"5h at {util:.0f}% (>= {stop_util}); waiting for reset")
                 _wait_for_reset(poll_sec)
 
-        if load_jobs():
-            run_queue(when="now")
-        time.sleep(poll_sec)
+            for s in sessions[: resume_cfg.get("max_sessions", 3)]:
+                resume_session(s, cfg)
+                usage = _quota_or_none()
+                if usage and usage.five_hour.exhausted:
+                    _log("window exhausted by resume; waiting for reset")
+                    _wait_for_reset(poll_sec)
+
+            if load_jobs():
+                run_queue(when="now")
+            time.sleep(poll_sec)
+    finally:
+        WATCH_PID_PATH.unlink(missing_ok=True)

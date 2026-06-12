@@ -388,7 +388,9 @@ async function refresh() {
       + `模型 ${esc(rn.model)} · ${esc(rn.cwd_name)}<br>`
       + `<span class="muted">${esc(rn.prompt)}</span>`;
   } else {
-    $('runbox').textContent = '空闲 — 当前没有任务在跑';
+    $('runbox').textContent = s.watch.running
+      ? '🟡 watch 运行中 · 等待额度或任务'
+      : '空闲 — 当前没有任务在跑';
   }
   if (s.runner_tail) {
     $('runtail').style.display = 'block'; $('runtail').textContent = s.runner_tail;
