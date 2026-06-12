@@ -218,6 +218,10 @@ PAGE = """<!doctype html>
 <div class="card"><h2>系统</h2>
   <div class="row"><label><input type="checkbox" id="autostart"
     onchange="post('/api/autostart',{enabled:this.checked})"> 开机自启托盘</label></div>
+  <div class="row"><button onclick="makeShortcut()">在桌面创建启动图标</button>
+    <span class="muted" id="shortcutmsg"></span></div>
+  <div class="muted">进程被关掉后，双击桌面图标（或在开始菜单搜索 “Sleep Well”）
+    即可重新启动；命令行也可运行 <b>nightshift tray</b>。</div>
   <div class="muted">数据目录: <span id="datadir"></span></div>
 </div>
 </div><!-- .grid -->
@@ -388,6 +392,11 @@ async function suggest() {
   $('wstatus').textContent = r.message;
   if (r.time) $('wtime').value = r.time;
 }
+async function makeShortcut() {
+  $('shortcutmsg').textContent = '创建中…';
+  const r = await post('/api/shortcut');
+  $('shortcutmsg').textContent = r.message || (r.ok ? '已创建' : '失败');
+}
 let EDITING = null;
 async function editJob(id) {
   const r = await post('/api/job/get', {id});
@@ -538,6 +547,7 @@ class PanelHandler(BaseHTTPRequestHandler):
                 body.get("what", "status")),
             "/api/autostart": lambda: self.app.set_autostart(
                 bool(body.get("enabled"))),
+            "/api/shortcut": self.app.create_shortcut,
         }
         fn = routes.get(self.path)
         if fn is None:

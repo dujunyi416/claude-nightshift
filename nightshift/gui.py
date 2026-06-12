@@ -12,6 +12,7 @@ still works (`nightshift tray` just opens the browser).
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -38,6 +39,38 @@ STARTUP_LNK = (
     Path.home() / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs"
     / "Startup/ClaudeNightshift.lnk"
 )
+
+
+def install_launcher() -> tuple[bool, str]:
+    """Create a 'Sleep Well' launch shortcut on the Desktop and in the Start
+    Menu, so the tray/panel can be relaunched with a double-click (or a Start
+    search) after the process is killed. Returns (ok, desktop_path_or_error)."""
+    if os.name != "nt":
+        return False, "仅支持 Windows（其他系统直接运行 `python -m nightshift tray`）"
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    exe = pythonw if pythonw.exists() else Path(sys.executable)
+    projroot = Path(__file__).resolve().parent.parent
+    # GetFolderPath resolves the *real* Desktop/Programs path even when it is
+    # redirected into OneDrive, which a hard-coded ~/Desktop would miss.
+    ps = (
+        "$ws = New-Object -ComObject WScript.Shell;"
+        "$dirs = @([Environment]::GetFolderPath('Desktop'),"
+        " [Environment]::GetFolderPath('Programs'));"
+        "foreach ($d in $dirs) {"
+        "  $l = $ws.CreateShortcut((Join-Path $d 'Sleep Well.lnk'));"
+        f"  $l.TargetPath = '{exe}';"
+        "  $l.Arguments = '-m nightshift tray';"
+        f"  $l.WorkingDirectory = '{projroot}';"
+        "  $l.Description = 'Sleep Well - Claude quota automation';"
+        "  $l.Save() };"
+        "[Environment]::GetFolderPath('Desktop')"
+    )
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return False, (r.stderr or "创建失败").strip()[:200]
+    lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+    return True, (lines[-1].strip() if lines else "")
 
 
 def _badge_color(util: float | None) -> str:
@@ -520,6 +553,15 @@ class App:
         STARTUP_LNK.unlink(missing_ok=True)
         return {"ok": True}
 
+    def create_shortcut(self) -> dict:
+        ok, info = install_launcher()
+        if not ok:
+            return {"ok": False, "message": info or "创建失败"}
+        where = f"（桌面：{info}）" if info else ""
+        return {"ok": True, "message":
+                f"已创建「Sleep Well」启动图标，进程被关掉后双击它（或开始菜单"
+                f"搜索 Sleep Well）即可重新启动{where}"}
+
     # ----- lifecycle -----
 
     def quit(self) -> None:
@@ -560,6 +602,7 @@ def run_gui(open_browser: bool = True) -> None:
                              default=True),
             pystray.MenuItem("立即预热", lambda: threading.Thread(
                 target=app.warmup_now, daemon=True).start()),
+            pystray.MenuItem("创建桌面启动图标", lambda: install_launcher()),
             pystray.MenuItem("退出", lambda: app.quit()),
         )
         app.icon = pystray.Icon("claude-nightshift", _make_icon_image(None),

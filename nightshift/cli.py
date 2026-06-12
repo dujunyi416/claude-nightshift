@@ -195,6 +195,20 @@ def cmd_tray(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_shortcut(args: argparse.Namespace) -> int:
+    from .gui import install_launcher
+
+    ok, info = install_launcher()
+    if ok:
+        print("created a 'Sleep Well' launch icon on the Desktop and Start Menu.")
+        if info:
+            print(f"  desktop: {info}")
+        print("double-click it (or search 'Sleep Well' in Start) to relaunch.")
+        return 0
+    print(f"failed: {info}")
+    return 1
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     cfg = load_config()
     if not CONFIG_PATH.exists():
@@ -296,6 +310,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-open", action="store_true",
                     help="don't auto-open the browser (used by autostart)")
     sp.set_defaults(func=cmd_tray)
+
+    sp = sub.add_parser("shortcut",
+                        help="create a Desktop/Start-Menu icon to relaunch the "
+                             "tray + panel after it's been closed")
+    sp.set_defaults(func=cmd_shortcut)
 
     sp = sub.add_parser("config", help="show config path and current values")
     sp.set_defaults(func=cmd_config)
