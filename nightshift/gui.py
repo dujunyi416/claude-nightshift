@@ -120,6 +120,8 @@ class App:
         self.icon = None
         self._schedule_text = ""
         self._stop = threading.Event()
+        self._cleanup_cycle = 0
+        self._cleanup_old_logs()  # run once at startup
 
     # ----- quota -----
 
@@ -150,6 +152,21 @@ class App:
             tip = "nightshift  " + "  ".join(bits)
         self.icon.title = tip[:120]
 
+    def _cleanup_old_logs(self, keep_days: int = 2) -> None:
+        """Delete done/failed job files older than keep_days days."""
+        from .jobs import DONE_DIR, FAILED_DIR
+
+        cutoff = time.time() - keep_days * 86400
+        for d in (DONE_DIR, FAILED_DIR):
+            if not d.exists():
+                continue
+            for p in d.iterdir():
+                try:
+                    if p.stat().st_mtime < cutoff:
+                        p.unlink()
+                except OSError:
+                    pass
+
     def _refresh_loop(self) -> None:
         from .warmup import maybe_keepwarm
 
@@ -157,6 +174,9 @@ class App:
         while not self._stop.wait(REFRESH_SEC):
             self.refresh_usage()
             last_keepwarm = maybe_keepwarm(last_keepwarm)
+            self._cleanup_cycle += 1
+            if self._cleanup_cycle % 60 == 0:  # once per hour
+                self._cleanup_old_logs()
 
     # ----- panel state -----
 
@@ -419,6 +439,10 @@ class App:
         return {"ok": ok, "message": "已推送到手机" if ok else "推送失败（未配置或网络）"}
 
     # ----- background monitor -----
+
+    def running_state(self) -> dict:
+        """Lightweight endpoint for the 3-second monitor poll."""
+        return {"running": self._running_view(), "runner_tail": self._runner_tail()}
 
     def _running_view(self) -> dict | None:
         from .jobs import get_running

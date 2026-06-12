@@ -535,8 +535,23 @@ function qDragEnd() {
   const ids = [...$('queue').querySelectorAll('[data-id]')].map(x => x.dataset.id);
   if (ids.length) post('/api/queue/reorder', {ids}).then(refresh);
 }
+async function monitorRefresh() {
+  const s = await (await fetch('/api/running')).json();
+  const rn = s.running;
+  if (rn) {
+    $('runbox').innerHTML = `🟢 <b>跑步中</b> · 已 ${rn.elapsed_min} 分钟 · `
+      + `模型 ${esc(rn.model)} · ${esc(rn.cwd_name)}<br>`
+      + `<span class="muted">${esc(rn.prompt)}</span>`;
+  } else {
+    $('runbox').textContent = '空闲 — 当前没有任务在跑';
+  }
+  if (s.runner_tail) {
+    $('runtail').style.display = 'block'; $('runtail').textContent = s.runner_tail;
+  } else { $('runtail').style.display = 'none'; }
+}
 refresh(); loadSessions();
 setInterval(refresh, 15000); setInterval(loadSessions, 120000);
+setInterval(monitorRefresh, 3000);
 </script></body></html>
 """
 
@@ -575,6 +590,8 @@ class PanelHandler(BaseHTTPRequestHandler):
             q = parse_qs(url.query)
             self._send_json(self.app.job_log(
                 q.get("id", [""])[0], q.get("status", ["done"])[0]))
+        elif url.path == "/api/running":
+            self._send_json(self.app.running_state())
         elif url.path == "/api/warmup/suggest":
             self._send_json(self.app.suggest_warmup())
         else:
