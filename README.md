@@ -1,9 +1,12 @@
-# claude-nightshift
+# Sleep Well 🌙
 
 **Quota-aware automation for Claude Code subscriptions.** Check your rate
 limits, pre-warm the 5-hour window before you wake up, queue prompts before
 bed, and auto-resume any task the limit cut off — the moment your quota
 resets.
+
+> The CLI command, Python package and data folder are still named `nightshift`
+> (so existing setups keep working); "Sleep Well" is the display name.
 
 [中文文档 →](README.zh-CN.md)
 
@@ -24,7 +27,7 @@ That creates three recoverable inefficiencies:
    at 01:00, and nobody is awake to use it. Queue prompts before bed and a
    runner executes them headlessly the moment quota returns.
 3. **Interrupted work stalls.** The limit cuts a session off mid-task and
-   the task just… sits there until you notice. nightshift detects the
+   the task just… sits there until you notice. Sleep Well detects the
    cutoff in the session transcript and resumes it automatically on reset.
 
 ## Install
@@ -43,7 +46,7 @@ python -m nightshift status
 ```
 
 Requires [Claude Code](https://code.claude.com) logged in with a Pro/Max
-subscription (nightshift reads the same local OAuth credential the CLI
+subscription (it reads the same local OAuth credential the CLI
 uses; nothing is sent anywhere except Anthropic's own usage endpoint).
 
 Optionally `pip install -e .` to get a global `nightshift` command.

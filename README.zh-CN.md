@@ -1,7 +1,10 @@
-# claude-nightshift 中文文档
+# Sleep Well 🌙 中文文档
 
 **额度感知的 Claude Code 自动工作流系统。** 查额度、起床前预热 5 小时窗口、
 睡前排队任务、限额一解除自动续跑被打断的会话。
+
+> 命令行命令、Python 包名、数据目录仍叫 `nightshift`（保证老配置不受影响），
+> “Sleep Well” 只是对外展示名。
 
 零第三方依赖（Python 3.10+ 标准库），Windows 优先（任务计划程序集成），
 核心命令在任何能跑 Claude Code 的平台都可用。

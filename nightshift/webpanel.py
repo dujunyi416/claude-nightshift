@@ -16,57 +16,114 @@ from urllib.parse import parse_qs, urlparse
 PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Nightshift</title>
+<title>Sleep Well</title>
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: "Segoe UI", system-ui, sans-serif; background:#14161a;
-         color:#e8e8e8; max-width:680px; margin:24px auto; padding:0 16px; }
-  h1 { font-size:20px; } h1 small { color:#888; font-weight:normal; font-size:12px; }
-  .card { background:#1d2025; border:1px solid #2a2e35; border-radius:10px;
-          padding:14px 16px; margin:12px 0; }
-  .card h2 { font-size:14px; margin:0 0 10px; color:#9ecbff; }
-  .bar { background:#2a2e35; border-radius:6px; height:14px; overflow:hidden; margin:4px 0 10px; }
-  .bar div { height:100%; border-radius:6px; transition:width .5s; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
-  .muted { color:#8a919c; font-size:12px; }
-  input[type=text], textarea { background:#14161a; color:#e8e8e8; border:1px solid #3a3f48;
-    border-radius:6px; padding:6px 8px; font-size:13px; }
-  textarea { width:100%; box-sizing:border-box; min-height:70px; }
-  button { background:#2b5ea7; color:#fff; border:0; border-radius:6px;
-           padding:6px 12px; cursor:pointer; font-size:13px; }
-  button.gray { background:#3a3f48; } button.red { background:#a73b2b; }
-  button.small { padding:3px 8px; font-size:12px; }
-  button:hover { filter:brightness(1.15); }
-  ul { list-style:none; padding:0; margin:8px 0 0; }
-  li { background:#14161a; border:1px solid #2a2e35; border-radius:6px;
-       padding:6px 8px; margin:4px 0; font-size:12px; display:flex;
-       justify-content:space-between; gap:8px; align-items:center; }
+  :root {
+    color-scheme: dark;
+    --bg:#0a0a0c; --card:rgba(28,28,30,.66); --stroke:rgba(255,255,255,.09);
+    --text:#f5f5f7; --text2:#a1a1a6; --text3:#6e6e73;
+    --accent:#0a84ff; --accent2:#409cff; --green:#30d158; --red:#ff453a;
+    --field:rgba(118,118,128,.16); --radius:18px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",
+           "Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { font-family:var(--font); color:var(--text); margin:0;
+    padding:40px 20px 64px; -webkit-font-smoothing:antialiased;
+    letter-spacing:.01em; line-height:1.5;
+    background:
+      radial-gradient(1100px 600px at 20% -10%, rgba(10,132,255,.16), transparent 60%),
+      radial-gradient(900px 600px at 95% 0%, rgba(120,80,255,.12), transparent 55%),
+      var(--bg);
+    background-attachment:fixed; }
+  .wrap { max-width:1040px; margin:0 auto; }
+  h1 { font-size:30px; font-weight:600; letter-spacing:-.02em; margin:0 0 22px;
+       display:flex; align-items:baseline; gap:12px; }
+  h1 small { color:var(--text3); font-weight:400; font-size:12px;
+             letter-spacing:0; }
+  .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+          gap:16px; align-items:start; grid-auto-flow:row dense; }
+  .span2 { grid-column:1 / -1; }
+  @media (max-width:760px){ .grid{ grid-template-columns:1fr; }
+    body{ padding:24px 14px 48px; } h1{ font-size:24px; } }
+  .card { background:var(--card); border:1px solid var(--stroke);
+    border-radius:var(--radius); padding:20px 22px;
+    backdrop-filter:blur(24px) saturate(160%);
+    -webkit-backdrop-filter:blur(24px) saturate(160%);
+    box-shadow:0 1px 0 rgba(255,255,255,.05) inset, 0 12px 34px rgba(0,0,0,.34);
+    transition:border-color .25s, transform .25s; }
+  .card:hover { border-color:rgba(255,255,255,.14); }
+  .card h2 { font-size:13px; font-weight:600; margin:0 0 14px;
+    color:var(--text2); letter-spacing:.02em; text-transform:none; }
+  .bar { background:rgba(255,255,255,.08); border-radius:99px; height:10px;
+         overflow:hidden; margin:6px 0 14px; }
+  .bar div { height:100%; border-radius:99px;
+             transition:width .6s cubic-bezier(.4,0,.2,1); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .muted { color:var(--text2); font-size:12px; }
+  input[type=text], textarea { background:var(--field); color:var(--text);
+    border:1px solid transparent; border-radius:10px; padding:8px 11px;
+    font-size:13px; font-family:var(--font); transition:border-color .2s,
+    background .2s, box-shadow .2s; outline:none; }
+  input[type=text]:focus, textarea:focus { border-color:var(--accent);
+    background:rgba(118,118,128,.22);
+    box-shadow:0 0 0 4px rgba(10,132,255,.18); }
+  textarea { width:100%; min-height:84px; resize:vertical; line-height:1.5; }
+  button { background:linear-gradient(180deg,var(--accent2),var(--accent));
+    color:#fff; border:0; border-radius:10px; padding:8px 15px; cursor:pointer;
+    font-size:13px; font-weight:500; font-family:var(--font);
+    transition:filter .15s, transform .08s, box-shadow .2s;
+    box-shadow:0 1px 2px rgba(0,0,0,.25); }
+  button.gray { background:var(--field); color:var(--text);
+    box-shadow:none; border:1px solid var(--stroke); }
+  button.red { background:linear-gradient(180deg,#ff6a60,var(--red)); }
+  button.small { padding:4px 9px; font-size:12px; border-radius:8px; }
+  button:hover { filter:brightness(1.08); }
+  button:active { transform:scale(.97); }
+  ul { list-style:none; padding:0; margin:10px 0 0; }
+  li { background:rgba(255,255,255,.035); border:1px solid var(--stroke);
+       border-radius:12px; padding:9px 12px; margin:7px 0; font-size:12px;
+       display:flex; justify-content:space-between; gap:9px; align-items:center;
+       transition:border-color .2s, background .2s; }
   li .grow { flex:1; min-width:0; overflow:hidden; }
   li .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  li.sel { border-color:#2b5ea7; background:#1a2433; }
+  li.sel { border-color:var(--accent); background:rgba(10,132,255,.12); }
   li.sess { cursor:pointer; }
-  .badge { font-size:11px; padding:1px 6px; border-radius:8px; white-space:nowrap; }
-  .badge.cut { background:#5a2520; color:#ff9d8a; }
-  .badge.res { background:#1f3a5c; color:#9ecbff; }
-  .badge.ok { background:#1f4a28; color:#8ae09a; }
-  .badge.fail { background:#5a2520; color:#ff9d8a; }
-  .ok { color:#5fd068; }
-  label { font-size:13px; }
-  pre { background:#0e1013; border:1px solid #2a2e35; border-radius:6px;
-        padding:8px; font-size:11px; white-space:pre-wrap; max-height:240px;
-        overflow:auto; }
-  #target { background:#1a2433; border:1px solid #2b5ea7; border-radius:6px;
-            padding:6px 10px; font-size:12px; margin-bottom:6px;
-            display:flex; justify-content:space-between; align-items:center; }
+  li.sess:hover { border-color:rgba(255,255,255,.18);
+                  background:rgba(255,255,255,.06); }
+  .badge { font-size:11px; padding:2px 8px; border-radius:99px; white-space:nowrap;
+           font-weight:500; }
+  .badge.cut { background:rgba(255,69,58,.16); color:#ff8a80; }
+  .badge.res { background:rgba(10,132,255,.16); color:var(--accent2); }
+  .badge.ok { background:rgba(48,209,88,.16); color:#5be07a; }
+  .badge.fail { background:rgba(255,69,58,.16); color:#ff8a80; }
+  .ok { color:var(--green); }
+  label { font-size:13px; display:inline-flex; align-items:center; gap:6px; }
+  input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; }
+  pre { background:rgba(0,0,0,.35); border:1px solid var(--stroke);
+        border-radius:12px; padding:12px; font-size:11px; white-space:pre-wrap;
+        max-height:260px; overflow:auto; line-height:1.45;
+        font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; }
+  #target { background:rgba(10,132,255,.1); border:1px solid var(--accent);
+            border-radius:12px; padding:8px 12px; font-size:12px;
+            margin-bottom:8px; display:flex; justify-content:space-between;
+            align-items:center; }
   li.qitem.paused { opacity:.5; }
-  li.qitem.dragover { border-color:#2b5ea7; background:#1a2433; }
-  .drag { cursor:grab; color:#6b7280; padding:0 4px; user-select:none;
-          font-size:14px; }
-  #edithint { display:none; color:#e0a020; }
+  li.qitem.dragover { border-color:var(--accent); background:rgba(10,132,255,.12); }
+  .drag { cursor:grab; color:var(--text3); padding:0 4px; user-select:none;
+          font-size:15px; }
+  #edithint { display:none; color:#ffd60a; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb { background:rgba(255,255,255,.14);
+    border-radius:99px; border:2px solid transparent; background-clip:padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,.24);
+    background-clip:padding-box; }
 </style></head><body>
-<h1>🌙 Claude Nightshift <small id="src"></small></h1>
+<div class="wrap">
+<h1>🌙 Sleep Well <small id="src"></small></h1>
+<div class="grid">
 
-<div class="card"><h2>额度</h2>
+<div class="card span2"><h2>额度</h2>
   <div>5 小时窗口 <b id="u5">…</b> <span class="muted" id="r5"></span></div>
   <div class="bar"><div id="b5" style="width:0%;background:#2e9e4f"></div></div>
   <div>7 天窗口 <b id="u7">…</b> <span class="muted" id="r7"></span></div>
@@ -85,7 +142,7 @@ PAGE = """<!doctype html>
   <div class="muted">例：16:00 限额重置，16:01 自动续上新窗口；时段外（睡觉时）不动作，交给每日预热。</div>
 </div>
 
-<div class="card"><h2>最近对话 — 每一项是一个对话（按项目分组），点击选中后在下方队列里"续写"它</h2>
+<div class="card span2"><h2>最近对话 — 每一项是一个对话（按项目分组），点击选中后在下方队列里"续写"它</h2>
   <div class="row"><input type="text" id="sfilter" size="24"
     placeholder="搜索标题 / 目录…" oninput="renderSessions()">
     <label><input type="checkbox" id="hidetrivial" checked
@@ -93,7 +150,7 @@ PAGE = """<!doctype html>
   <ul id="sessions"><li class="muted">加载中…</li></ul>
 </div>
 
-<div class="card"><h2>睡前任务队列</h2>
+<div class="card span2"><h2>睡前任务队列</h2>
   <div id="target" style="display:none">
     <span>↻ 续写会话：<b id="tname"></b> <span class="muted" id="tdir"></span></span>
     <button class="gray small" onclick="clearTarget()">改为新任务</button>
@@ -115,7 +172,7 @@ PAGE = """<!doctype html>
   <span id="wstate" class="muted"></span></div>
 </div>
 
-<div class="card"><h2>执行历史</h2>
+<div class="card span2"><h2>执行历史</h2>
   <ul id="history"><li class="muted">暂无</li></ul>
   <pre id="logview" style="display:none"></pre>
 </div>
@@ -160,12 +217,14 @@ PAGE = """<!doctype html>
     onchange="post('/api/autostart',{enabled:this.checked})"> 开机自启托盘</label></div>
   <div class="muted">数据目录: <span id="datadir"></span></div>
 </div>
+</div><!-- .grid -->
+</div><!-- .wrap -->
 
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => (s||'').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const color = u => u==null?'#5a6472':u>=90?'#cc3333':u>=70?'#e07020':u>=50?'#d8a200':'#2e9e4f';
+const color = u => u==null?'#6e6e73':u>=90?'#ff453a':u>=70?'#ff9f0a':u>=50?'#ffd60a':'#30d158';
 let SESSIONS = [], TARGET = null;
 async function post(url, body) {
   const r = await fetch(url, {method:'POST', body: JSON.stringify(body||{})});
