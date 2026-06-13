@@ -1,10 +1,15 @@
 import os
 import tempfile
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from unittest.mock import patch
 
 os.environ.setdefault("NIGHTSHIFT_HOME", tempfile.mkdtemp(prefix="ns_test_"))
 
+from nightshift import quota  # noqa: E402
+from nightshift.credentials import OAuthCreds  # noqa: E402
 from nightshift.quota import Window, parse_usage  # noqa: E402
 
 SAMPLE = {
@@ -60,6 +65,42 @@ class TestWindow(unittest.TestCase):
         w = Window(utilization=50, resets_at=self._future(hours=2))
         self.assertAlmostEqual(w.seconds_to_reset(), 7200, delta=5)
         self.assertIsNone(Window(None, None).seconds_to_reset())
+
+
+class TestFetchUsageForceRaises(unittest.TestCase):
+    """force=True must surface API failures instead of silently returning
+    stale data — that masked the bug where the panel was 'stuck at 38%'."""
+
+    def _fake_creds(self):
+        return OAuthCreds(access_token="x", expires_at_ms=10**13,
+                          subscription_type="pro", rate_limit_tier="standard")
+
+    def test_force_raises_on_401_with_token_message(self):
+        http_err = urllib.error.HTTPError(
+            quota.USAGE_URL, 401, "Unauthorized", {}, BytesIO(b""))
+        with patch.object(quota, "load_creds", return_value=self._fake_creds()), \
+             patch("urllib.request.urlopen", side_effect=http_err):
+            with self.assertRaises(RuntimeError) as cm:
+                quota.fetch_usage(force=True)
+            self.assertIn("token", str(cm.exception))
+            self.assertIn("401", str(cm.exception))
+
+    def test_force_raises_on_429(self):
+        http_err = urllib.error.HTTPError(
+            quota.USAGE_URL, 429, "Too Many Requests", {}, BytesIO(b""))
+        with patch.object(quota, "load_creds", return_value=self._fake_creds()), \
+             patch("urllib.request.urlopen", side_effect=http_err):
+            with self.assertRaises(RuntimeError) as cm:
+                quota.fetch_usage(force=True)
+            self.assertIn("429", str(cm.exception))
+
+    def test_force_raises_on_network_error(self):
+        with patch.object(quota, "load_creds", return_value=self._fake_creds()), \
+             patch("urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("dns fail")):
+            with self.assertRaises(RuntimeError) as cm:
+                quota.fetch_usage(force=True)
+            self.assertIn("网络", str(cm.exception))
 
 
 if __name__ == "__main__":

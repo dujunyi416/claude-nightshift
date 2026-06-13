@@ -125,10 +125,27 @@ def _read_statusline_snapshot(max_age_sec: float = 600) -> UsageSnapshot | None:
     return None
 
 
+def _explain_fetch_error(e: Exception) -> str:
+    """Translate a fetch failure into a short Chinese reason for the UI."""
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 401:
+            return "token 已过期（HTTP 401）"
+        if e.code == 429:
+            return "被限流（HTTP 429），稍后再试"
+        return f"HTTP {e.code}"
+    if isinstance(e, json.JSONDecodeError):
+        return "返回内容不是合法 JSON"
+    reason = getattr(e, "reason", None) or e
+    return f"网络错误：{reason}"
+
+
 def fetch_usage(force: bool = False, ttl: float | None = None) -> UsageSnapshot:
     """Fetch quota, preferring fresh cache, then the API, then fallbacks.
 
-    Raises RuntimeError only if every source fails.
+    When force=True the API failure is raised (no silent fallback to stale
+    cache) — callers asking for fresh data deserve to know it didn't happen.
+    When force=False we degrade gracefully through stale cache and the
+    statusline snapshot before raising.
     """
     cfg = load_config()
     ttl = ttl if ttl is not None else cfg["quota"]["cache_ttl_sec"]
@@ -154,7 +171,8 @@ def fetch_usage(force: bool = False, ttl: float | None = None) -> UsageSnapshot:
         return parse_usage(raw)
     except (urllib.error.URLError, urllib.error.HTTPError, OSError,
             json.JSONDecodeError) as e:
-        # Degrade gracefully: stale cache beats nothing.
+        if force:
+            raise RuntimeError(_explain_fetch_error(e)) from e
         stale = _read_cache(ttl=86400)
         if stale:
             stale.source = "cache(stale)"

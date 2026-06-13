@@ -126,10 +126,14 @@ class App:
     def refresh_usage(self, force: bool = False) -> dict:
         try:
             self.usage = fetch_usage(force=force)
-        except RuntimeError:
-            self.usage = None
+        except RuntimeError as e:
+            # Preserve self.usage so the panel doesn't blank out — the user
+            # still wants to see the last-known numbers, just with a clear
+            # "refresh failed" message.
+            self._update_icon()
+            return {"ok": False, "message": str(e)}
         self._update_icon()
-        return {"ok": self.usage is not None}
+        return {"ok": True}
 
     def _update_icon(self) -> None:
         if self.icon is None:
@@ -173,11 +177,17 @@ class App:
                         if w.resets_at else ""),
                     "countdown": _fmt_countdown(w.seconds_to_reset()),
                 }
+            from .credentials import load_creds
+            try:
+                token_expired = load_creds().expired
+            except (OSError, KeyError, ValueError):
+                token_expired = False
             usage = {
                 "five_hour": win(u.five_hour),
                 "seven_day": win(u.seven_day),
                 "source": u.source,
                 "fetched_local": f"{u.fetched_at.astimezone():%H:%M:%S}",
+                "token_expired": token_expired,
             }
         weekly = None
         if u:

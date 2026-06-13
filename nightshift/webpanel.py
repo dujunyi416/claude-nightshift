@@ -144,7 +144,7 @@ PAGE = """<!doctype html>
   <div>7 天窗口 <b id="u7">…</b> <span class="muted" id="r7"></span></div>
   <div class="bar"><div id="b7" style="width:0%;background:#2e9e4f"></div></div>
   <div class="muted" id="weekly"></div>
-  <div class="row"><button class="gray" onclick="act('/api/refresh').then(refresh)">立即刷新</button>
+  <div class="row"><button class="gray" id="rbtn" onclick="doRefresh()">立即刷新</button>
   <button class="gray" onclick="act('/api/warmup_now')">立即预热窗口</button></div>
 </div>
 
@@ -340,12 +340,37 @@ async function loadSessions() {
   SESSIONS = await (await fetch('/api/sessions')).json();
   renderSessions();
 }
+async function doRefresh() {
+  const btn = $('rbtn');
+  btn.disabled = true; btn.textContent = '刷新中…';
+  try {
+    const r = await post('/api/refresh');
+    await refresh();
+    if (!r.ok) {
+      // Show after refresh() so the error is the final visible state — the
+      // old snapshot stays on screen (numbers unchanged) but the user
+      // learns *why* nothing updated.
+      $('src').textContent = '刷新失败：' + (r.message || '未知错误')
+        + '（显示的是上次数据）';
+      $('src').style.color = '#ff453a';
+      setTimeout(() => { refresh(); }, 5000);
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = '立即刷新';
+  }
+}
 async function refresh() {
   const s = await (await fetch('/api/state')).json();
   if (s.usage) {
     fmtWin(s.usage.five_hour,'u5','b5','r5');
     fmtWin(s.usage.seven_day,'u7','b7','r7');
     $('src').textContent = `更新 ${s.usage.fetched_local} · 来源 ${s.usage.source}`;
+    if (s.usage.token_expired && (s.usage.source || '').includes('stale')) {
+      $('src').textContent += ' · ⚠ token 已过期，跑任意 claude 命令可刷新';
+      $('src').style.color = '#ffd60a';
+    } else {
+      $('src').style.color = '';
+    }
   } else { $('src').textContent = '额度获取失败（token 过期？任何 claude 命令可刷新）'; }
   if (s.weekly) {
     const w = s.weekly;
